@@ -7,7 +7,7 @@ This project intentionally separates audio playback, metadata processing, and di
 ⸻
 
 System Architecture (Three Pis)
-
+'''
 ┌────────────────────────┐
 │ Pi #1 -- moOde Player   │
 │ (Audio playback)       │
@@ -37,7 +37,7 @@ System Architecture (Three Pis)
 │ • index1080.html       │
 │ • script1080.js        │
 └────────────────────────┘
-
+'''
 
 ⸻
 
