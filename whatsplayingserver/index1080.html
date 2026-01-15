@@ -1,0 +1,237 @@
+<!-- index1080.html (drop-in replacement) -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Now Playing 1080</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  height: 100vh; width: 100vw; overflow: hidden;
+  background: black; color: white; font-family: 'Inter', sans-serif;
+  position: relative;
+}
+
+/* Full-screen blurred background (set via JS) */
+#background-image {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%;
+  height: 100%;
+
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-color: black;
+
+  filter: blur(35px) brightness(0.18);
+  transform: scale(1.08);
+
+  z-index: -2;
+}
+
+#album-art-wrapper {
+  width: 700px;
+  height: 700px;
+  flex-shrink: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+#album-art {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 32px;
+  box-shadow: 0 40px 100px rgba(0,0,0,0.9);
+  cursor: pointer;
+  transition: transform 0.3s ease;
+}
+
+#album-art-bg {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 32px;
+  filter: blur(50px) brightness(0.2);
+  z-index: -1;
+  transition: none;
+}
+
+#content {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: left;
+  width: 100%;
+  height: 100%;
+  padding-left: 100px;
+  padding-right: 100px;
+  gap: 100px;
+  z-index: 1;
+}
+
+.text-column {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: flex-start;
+  gap: 20px;
+  height: 700px;            /* align with album art */
+  width: 100%;
+  max-width: 1100px;
+
+  position: relative;       /* anchor for absolute-positioned logo */
+  padding-bottom: 10px;     /* breathing room above bottom edge */
+}
+
+
+#artist-name { font-size: 60px; font-weight: 600; text-shadow: 0 4px 14px rgba(0,0,0,0.9); }
+#track-title { font-size: 50px; font-weight: 600; text-shadow: 0 3px 12px rgba(0,0,0,0.9); }
+#album-link  { font-size: 48px; color: #ccc; text-decoration: none; text-shadow: 0 2px 10px rgba(0,0,0,0.8); }
+#file-info   { font-size: 36px; font-weight: 600; color: #aaa; text-shadow: 0 2px 8px rgba(0,0,0,0.8); }
+
+.hires-badge {
+  display: inline-block;
+  background-color: gold;
+  color: black;
+  font-size: 0.6em;
+  padding: 1px 4px;
+  margin-left: 8px;
+  border: 2px solid #b8860b;
+  border-radius: 6px;
+  position: relative;
+  top: -6px;
+}
+
+#personnel-info {
+  font-size: 18px;
+  color: #ccc;
+  line-height: 1.4;
+  word-wrap: break-word;
+  display: block;
+  margin-bottom: 12px;
+  margin-right: 100px;
+}
+
+/* Progress Bar */
+#progress-bar-wrapper {
+  width: 900px;
+  height: 8px;
+  background: rgba(255,255,255,0.15);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-top: auto; /* push to bottom of column when visible */
+}
+
+#progress-fill {
+  height: 8px;
+  width: 0%;
+  background: #4fc3f7;
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+/* Bottom-right mode logo (Radio icon or AirPlay icon) */
+
+#mode-logo {
+  width: 75px;
+  height: 75px;
+
+  border-radius: 16px;   /* scaled down from 32 */
+  object-fit: cover;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  opacity: 0.9;
+
+  display: none;
+}
+
+/* Modal overlay (click album art) */
+#artist-details-container {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.75);
+  display: none;
+  z-index: 999;
+  align-items: center;
+  justify-content: center;
+}
+
+#artist-details {
+  max-width: 90%;
+  max-height: 90%;
+  overflow-y: auto;
+  font-size: 24px;
+  line-height: 1.7;
+  text-align: center;
+
+  background: rgba(0,0,0,0.85);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 20px;
+  padding: 40px 50px;
+}
+
+#artist-details p { margin: 56px 0; }
+.fade-in { opacity: 1; transition: opacity 2s ease; }
+.fade-out { opacity: 0; transition: opacity 3s ease; }
+</style>
+</head>
+
+<body>
+  <div id="background-image"></div>
+
+  <div id="content">
+    <!-- Album Art Column -->
+    <div id="album-art-wrapper">
+      <div id="album-art-bg"></div>
+      <img
+        id="album-art"
+        src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+        alt="Album Art"
+        class="fade-in"
+      >
+    </div>
+
+    <!-- Text Column -->
+    <div class="text-column">
+      <div id="artist-name" class="fade-in"></div>
+      <div id="track-title" class="fade-in"></div>
+
+      <div id="album-info">
+        <a id="album-link" href="javascript:void(0)"><span id="album-text"></span></a>
+      </div>
+
+      <div id="file-info" class="fade-in">
+        <span id="file-info-text"></span>
+        <span id="hires-badge" class="hires-badge" style="display:none;">Lossless</span>
+      </div>
+
+      <!-- Combined Personnel + Producer Info -->
+      <div id="personnel-info"></div>
+
+      <!-- Progress Bar (tracks only) -->
+      <div id="progress-bar-wrapper">
+        <div id="progress-fill"></div>
+      </div>
+
+      <!-- Bottom-right mode logo (radio icon or airplay.png) -->
+      <img id="mode-logo" alt="" />
+    </div>
+  </div>
+
+  <!-- Album Art Click Modal -->
+  <div id="artist-details-container">
+    <div id="artist-details"></div>
+  </div>
+
+  <script src="script1080.js"></script>
+</body>
+</html>
