@@ -241,3 +241,6 @@ Summary
 ✔ Metadata handled once, cached intelligently
 ✔ Display is lightweight and disposable
 ✔ Designed for always-on use
+
+<img src="IMG_6007.jpeg" alt="WPS" align="left" width="600">
+
