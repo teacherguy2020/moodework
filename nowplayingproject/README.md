@@ -222,7 +222,8 @@ Example of json returned:
 
   "isStream": false,
   "isAirplay": false
-}```
+}
+```
 This is how we build the web page.
 
 
