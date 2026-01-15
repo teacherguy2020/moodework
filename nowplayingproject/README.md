@@ -212,6 +212,7 @@ GET /now-playing returns a fully merged object containing:
 	•	Producer (PRODUCER)
 	•	Year (with robust fallback logic)
 	•	Stream / AirPlay detection
+	•   Performs iTunes public API lookup for radio tracks, grabs art
 
 The UI never talks directly to moOde -- it only talks to Pi #2.
 
