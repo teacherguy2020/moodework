@@ -164,6 +164,12 @@ Test:
 
 curl http://<PI2_IP>:3000/now-playing | jq
 
+Example of json returned:
+
+{"artist":"Sting","title":"Fragile","album":"...All This Time","file":"USB/SamsungMoode/Ondesoft/All This Time (Live)/Sting-AllThisTime-1-Fragile.flac","albumArtUrl":"http://10.0.0.254/coverart.php/USB%2FSamsungMoode%2FOndesoft%2FAll%20This%20Time%20%28Live%29%2FSting-AllThisTime-1-Fragile.flac","altArtUrl":"","radioAlbum":"","radioYear":"","radioLabel":"","radioComposer":"","radioWork":"","radioPerformers":"","state":"play","elapsed":4.357,"duration":275.922,"percent":2,"year":"2001","label":"A&M Records","producer":"Kipper","personnel":["Christian McBride (acoustic bass)","Janice Pendarvis (backing vocals)","Katreese Barnes (backing vocals)","Sting (bass)","Jaques Morelenbaum (cello)","Manu Katché (drums)","Haoua Abdenacer (goblet drum)","Dominic Miller (guitar)","Sting (guitar)","Kipper (keyboards)","Jeff Young (organ)","BJ Cole (pedal steel guitar)","Marcos Suzano (percussion)","Jason Rebello (piano)","Kipper (programming)","Chris Botti (trumpet)","Sting (vocals)"],"encoded":"FLAC 24/44.1 kHz, 2ch","bitrate":"1.206 Mbps","outrate":"PCM 32/44.1 kHz, 2ch","volume":"0","mute":"0","track":"1","date":"200100","isStream":false,"isAirplay":false}
+
+This is how we build the web page.
+
 
 ⸻
 
