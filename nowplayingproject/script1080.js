@@ -19,7 +19,14 @@
 
 const NOW_PLAYING_URL = 'http://10.0.0.233:3000/now-playing';
 const AIRPLAY_ICON_URL = 'http://10.0.0.233:8000/airplay.png?v=1';
-
+// Pause "screensaver" behavior
+const ENABLE_PAUSE_SCREENSAVER = true;
+const PAUSE_ART_URL = 'http://10.0.0.254/images/default-album-cover.png'; // <-- set to your moOde default jpg/png
+const PAUSE_MOVE_INTERVAL_MS = 8000; // move every 8s
+const PAUSE_ART_MIN_MARGIN_PX = 20;  // keep away from edges a bit
+let pauseMode = false;
+let lastPauseMoveTs = 0;
+let justResumedFromPause = false;
 /* =========================
  * Feature toggles
  * ========================= */
@@ -65,13 +72,23 @@ function fetchNowPlaying() {
       // - For files/radio: require play/playing
       // - For AirPlay: allow even if MPD says stop
       const state = String(data.state || '').toLowerCase();
-      const mpdPlaying = (state === 'play' || state === 'playing');
+      const paused = isPausedState(data);
+      // Pause screensaver mode
+      if (ENABLE_PAUSE_SCREENSAVER && paused) {
+            if (!pauseMode) setPausedScreensaver(true);
 
-      if (!mpdPlaying && !isAirplay) {
-        clearUI();
-        return;
+            setProgressVisibility(true);   // hide progress bar during pause
+            hideModeLogo();                // hide radio / AirPlay icon
+            movePauseArtRandomly(false);   // drift default art
+
+            return; // ⛔ stop here -- do NOT update UI while paused
+      } else if (pauseMode) {
+            // Resume from pause
+            setPausedScreensaver(false);
+            justResumedFromPause = true;   // ✅ force one normal UI refresh
+            // fall through to normal handling
       }
-
+      
       // Hide progress for radio and AirPlay
       setProgressVisibility(isStream || isAirplay);
 
@@ -94,21 +111,31 @@ function fetchNowPlaying() {
         baseKey = data.file || `${data.artist}|${data.album}|${data.title}`;
       }
 
+      // ----------------------------
+      // Track-change detection
+      // ----------------------------
+
       if (!isStream) {
-        if (baseKey !== currentTrackKey) {
-          currentTrackKey = baseKey;
-          updateUI(data);
-        }
-        return;
+            // Local files + AirPlay
+            if (justResumedFromPause || baseKey !== currentTrackKey) {
+                  currentTrackKey = baseKey;
+                  updateUI(data);
+            }
+            justResumedFromPause = false;
+            return;
       }
 
+      // Radio streams
       const stabilized = stabilizeRadioDisplay(data);
       const radioKey = `${baseKey}|${stabilized.artist}|${stabilized.title}`;
 
-      if (radioKey !== currentTrackKey) {
-        currentTrackKey = radioKey;
-        updateUI({ ...data, _radioDisplay: stabilized });
+      if (justResumedFromPause || radioKey !== currentTrackKey) {
+            currentTrackKey = radioKey;
+            updateUI({ ...data, _radioDisplay: stabilized });
       }
+      justResumedFromPause = false;
+
+
     })
     .catch(() => {
       // Quiet: avoid console spam during brief network hiccups
@@ -147,6 +174,108 @@ function setModeLogo({ isStream, isAirplay, stationLogoUrl }) {
 /* =========================
  * Helpers
  * ========================= */
+ 
+ function hideModeLogo() {
+  const logoEl = document.getElementById('mode-logo');
+  if (!logoEl) return;
+  logoEl.style.display = 'none';
+  logoEl.removeAttribute('src');
+}
+ 
+ function isPausedState(data) {
+  const state = String(data.state || '').toLowerCase();
+  return (state === 'pause' || state === 'paused');
+}
+
+function setPausedScreensaver(on) {
+  pauseMode = on;
+  // Force full black backdrop during pause (prevents top-band bleed)
+  document.body.style.backgroundColor = on ? '#000' : '';
+  document.documentElement.style.backgroundColor = on ? '#000' : '';
+
+  // Hide/show text + info areas (adjust IDs to match your HTML)
+  const artistEl = document.getElementById('artist-name');
+  const trackEl  = document.getElementById('track-title');
+  const albumEl  = document.getElementById('album-link');
+  const fileInfoText = document.getElementById('file-info-text');
+  const hiresBadge = document.getElementById('hires-badge');
+  const personnelEl = document.getElementById('personnel-info');
+
+  const show = !on;
+  if (artistEl) artistEl.style.display = show ? '' : 'none';
+  if (trackEl)  trackEl.style.display  = show ? '' : 'none';
+  if (albumEl)  albumEl.style.display  = show ? '' : 'none';
+  if (fileInfoText) fileInfoText.style.display = show ? '' : 'none';
+  if (hiresBadge) hiresBadge.style.display = show ? '' : 'none';
+  if (personnelEl) personnelEl.style.display = show ? '' : 'none';
+
+  // Swap art to pause art
+  const artEl = document.getElementById('album-art');
+  if (artEl) {
+    if (on) {
+      artEl.src = PAUSE_ART_URL;
+
+      // IMPORTANT: don't poison lastAlbumArtUrl with PAUSE_ART_URL.
+      // Instead, force the next normal update to always re-apply real artwork.
+      lastAlbumArtUrl = '';
+
+      artEl.style.position = 'fixed';
+      artEl.style.maxWidth = '40vw';
+      artEl.style.maxHeight = '40vh';
+      artEl.style.width = 'auto';
+      artEl.style.height = 'auto';
+      movePauseArtRandomly(true);
+    } else {
+    
+      // restore styles; your CSS will take over again
+      artEl.style.position = '';
+      artEl.style.left = '';
+      artEl.style.top = '';
+      artEl.style.transform = '';
+      artEl.style.maxWidth = '';
+      artEl.style.maxHeight = '';
+      artEl.style.width = '';
+      artEl.style.height = '';
+    }
+  }
+
+  // Background: black during pause
+  const bgEl = document.getElementById('background-image');
+  const artBgEl = document.getElementById('album-art-bg');
+  if (bgEl) bgEl.style.backgroundImage = 'none';
+  if (artBgEl) artBgEl.style.backgroundImage = 'none';
+}
+
+function movePauseArtRandomly(force = false) {
+  if (!pauseMode) return;
+
+  const now = Date.now();
+  if (!force && (now - lastPauseMoveTs) < PAUSE_MOVE_INTERVAL_MS) return;
+  lastPauseMoveTs = now;
+
+  const artEl = document.getElementById('album-art');
+  if (!artEl) return;
+
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+
+  // Use rendered size if available; otherwise estimate
+  const rect = artEl.getBoundingClientRect();
+  const w = rect.width || Math.min(400, vw * 0.4);
+  const h = rect.height || Math.min(400, vh * 0.4);
+
+  const minX = PAUSE_ART_MIN_MARGIN_PX;
+  const minY = PAUSE_ART_MIN_MARGIN_PX;
+  const maxX = Math.max(minX, vw - w - PAUSE_ART_MIN_MARGIN_PX);
+  const maxY = Math.max(minY, vh - h - PAUSE_ART_MIN_MARGIN_PX);
+
+  const x = minX + Math.random() * (maxX - minX);
+  const y = minY + Math.random() * (maxY - minY);
+
+  artEl.style.left = `${x}px`;
+  artEl.style.top = `${y}px`;
+  artEl.style.transform = 'none';
+}
 
 function normalizeDashSpacing(s) {
   // Only normalize separator hyphens that already have spaces around them (or multiple spaces).
