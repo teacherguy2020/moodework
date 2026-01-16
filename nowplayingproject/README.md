@@ -1,15 +1,15 @@
 MoOde "Now Playing"
 
-A distributed, high-performance "What’s Playing" display system for moOde Audio Player, designed for a dedicated full-screen 1080p display (or view on your computer/device) and optimized for Raspberry Pi hardware.
+A distributed, high-performance "Now Playing" display system for moOde Audio Player, designed for a dedicated full-screen 1080p display (or view on your computer/device) and optimized for Raspberry Pi hardware.
 
 This project intentionally separates audio playback, metadata processing, and display rendering across three Raspberry Pi devices for stability, performance, and flexibility.
 
 ⸻
 
 System Architecture (Three Pis)
-
+```
 ┌────────────────────────┐
-│ Pi #1 -- moOde Player   │
+│ Pi #1 -- moOde Player  │
 │ (Audio playback)       │
 │                        │
 │ • MPD / moOde          │
@@ -19,7 +19,7 @@ System Architecture (Three Pis)
           │ HTTP (JSON)
           ▼
 ┌────────────────────────┐
-│ Pi #2 -- API + Web Host │
+│ Pi #2 -- API + Web Host│
 │ (Logic + Metadata)     │
 │                        │
 │ • server.mjs (Node)    │  ← Port 3000
@@ -30,14 +30,14 @@ System Architecture (Three Pis)
           │ HTTP (HTML/JS)
           ▼
 ┌────────────────────────┐
-│ Pi #3 -- Display Node   │
+│ Pi #3 -- Display Node  │
 │ (TV / Monitor)         │
 │                        │
 │ • Chromium kiosk       │
 │ • index1080.html       │
 │ • script1080.js        │
 └────────────────────────┘
-
+```
 
 ⸻
 
@@ -142,6 +142,7 @@ PI4_MOUNT_BASE  = '/mnt/YOURMUSICDRIVE'
 These must match how moOde reports file paths.
 
 ⸻
+Be sure to enter your IP info in the files.
 
 Start the API server (Port 3000)
 
@@ -165,9 +166,65 @@ Test:
 curl http://<PI2_IP>:3000/now-playing | jq
 
 Example of json returned:
+```
+{
+  "artist": "Sting",
+  "title": "Fragile",
+  "album": "...All This Time",
+  "file": "USB/SamsungMoode/Ondesoft/All This Time (Live)/Sting-AllThisTime-1-Fragile.flac",
 
-{"artist":"Sting","title":"Fragile","album":"...All This Time","file":"USB/SamsungMoode/Ondesoft/All This Time (Live)/Sting-AllThisTime-1-Fragile.flac","albumArtUrl":"http://10.0.0.254/coverart.php/USB%2FSamsungMoode%2FOndesoft%2FAll%20This%20Time%20%28Live%29%2FSting-AllThisTime-1-Fragile.flac","altArtUrl":"","radioAlbum":"","radioYear":"","radioLabel":"","radioComposer":"","radioWork":"","radioPerformers":"","state":"play","elapsed":4.357,"duration":275.922,"percent":2,"year":"2001","label":"A&M Records","producer":"Kipper","personnel":["Christian McBride (acoustic bass)","Janice Pendarvis (backing vocals)","Katreese Barnes (backing vocals)","Sting (bass)","Jaques Morelenbaum (cello)","Manu Katché (drums)","Haoua Abdenacer (goblet drum)","Dominic Miller (guitar)","Sting (guitar)","Kipper (keyboards)","Jeff Young (organ)","BJ Cole (pedal steel guitar)","Marcos Suzano (percussion)","Jason Rebello (piano)","Kipper (programming)","Chris Botti (trumpet)","Sting (vocals)"],"encoded":"FLAC 24/44.1 kHz, 2ch","bitrate":"1.206 Mbps","outrate":"PCM 32/44.1 kHz, 2ch","volume":"0","mute":"0","track":"1","date":"200100","isStream":false,"isAirplay":false}
+  "albumArtUrl": "http://10.0.0.254/coverart.php/USB%2FSamsungMoode%2FOndesoft%2FAll%20This%20Time%20%28Live%29%2FSting-AllThisTime-1-Fragile.flac",
+  "altArtUrl": "",
 
+  "radioAlbum": "",
+  "radioYear": "",
+  "radioLabel": "",
+  "radioComposer": "",
+  "radioWork": "",
+  "radioPerformers": "",
+
+  "state": "play",
+  "elapsed": 4.357,
+  "duration": 275.922,
+  "percent": 2,
+
+  "year": "2001",
+  "label": "A&M Records",
+  "producer": "Kipper",
+
+  "personnel": [
+    "Christian McBride (acoustic bass)",
+    "Janice Pendarvis (backing vocals)",
+    "Katreese Barnes (backing vocals)",
+    "Sting (bass)",
+    "Jaques Morelenbaum (cello)",
+    "Manu Katché (drums)",
+    "Haoua Abdenacer (goblet drum)",
+    "Dominic Miller (guitar)",
+    "Sting (guitar)",
+    "Kipper (keyboards)",
+    "Jeff Young (organ)",
+    "BJ Cole (pedal steel guitar)",
+    "Marcos Suzano (percussion)",
+    "Jason Rebello (piano)",
+    "Kipper (programming)",
+    "Chris Botti (trumpet)",
+    "Sting (vocals)"
+  ],
+
+  "encoded": "FLAC 24/44.1 kHz, 2ch",
+  "bitrate": "1.206 Mbps",
+  "outrate": "PCM 32/44.1 kHz, 2ch",
+  "volume": "0",
+  "mute": "0",
+
+  "track": "1",
+  "date": "200100",
+
+  "isStream": false,
+  "isAirplay": false
+}
+```
 This is how we build the web page.
 
 
