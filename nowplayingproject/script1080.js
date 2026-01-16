@@ -199,10 +199,7 @@ function expandInstrumentAbbrevs(input) {
   let s = String(input || '');
   if (!s) return s;
 
-  // Replace only when the abbreviation is a standalone token, commonly after comma/space,
-  // and before punctuation/end.
   const reps = [
-    // strings that often appear in your WFMT-style data:
     ['vc', 'cello'],
     ['db', 'double bass'],
     ['cb', 'double bass'],
@@ -228,7 +225,6 @@ function expandInstrumentAbbrevs(input) {
     ['vn', 'violin'],
     ['vla','viola'],
     ['va', 'viola'],
-    // ⚠️ "vi" is ambiguous (violin vs viola). In your examples it’s typically viola.
     ['vi', 'viola'],
     ['sop','soprano'],
     ['mez','mezzo-soprano'],
@@ -239,11 +235,21 @@ function expandInstrumentAbbrevs(input) {
   ];
 
   for (const [abbr, full] of reps) {
-    // Examples matched:
-    // ", vi;"  ", vi)"  " vi;"  " vi,"  " vi " (end)
-    const re = new RegExp(`([,;\\s])${abbr}(?=\\s*[;,)\\]]|\\s*$)`, 'gi');
+    // Matches tokens like:
+    // ", vi;"  ", vi)"  " vi;"  " vi,"  " vi" (end)  ", p -"  ", cl -"
+    const re = new RegExp(
+      `([,;\\s])${abbr}(?=\\s*(?:[;,)\\]]|\\-|$))`,
+      'gi'
+    );
     s = s.replace(re, `$1${full}`);
   }
+
+  // Ensure exactly one space around separator hyphens
+  // (prevents "p- Mozart" or "p -Mozart" variants)
+  s = s.replace(/\s*-\s*/g, ' - ');
+
+  // Optional: collapse any doubles created by replacements
+  s = s.replace(/\s{2,}/g, ' ').trim();
 
   return s;
 }
