@@ -267,6 +267,7 @@ function expandInstrumentAbbrevs(input) {
     ['cl', 'clarinet'],
     ['bcl','bass clarinet'],
     ['fl', 'flute'],
+    ['g', 'guitar'],
     ['pic', 'piccolo'],
     ['bn', 'bassoon'],
     ['cbsn', 'contrabassoon'],
