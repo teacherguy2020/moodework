@@ -1,0 +1,106 @@
+# /etc/systemd/system/rgb_moode.service
+#
+# moOde RGB LED Service
+# ====================
+#
+# This systemd service runs the RGB LED controller for the moOde player.
+# It reflects playback state (MPD, AirPlay, Radio) on a WS2812 NeoPixel
+# ring driven via SPI.
+#
+# ------------------------------------------------------------
+# WHAT THIS SERVICE DOES
+# ------------------------------------------------------------
+#
+# • Starts the Python script:
+#     /usr/local/bin/rgb_moode_service.py
+#
+# • Runs continuously in the background
+# • Requires:
+#     - SPI enabled at boot
+#     - X11 running (for DPMS screen blank detection via xset)
+#     - moOde MPD "Metadata file" enabled
+#
+# ------------------------------------------------------------
+# WHY IT RUNS AS ROOT
+# ------------------------------------------------------------
+#
+# • Access to /dev/spidev0.0 (SPI device)
+# • Access to GPIO
+# • Reliable access to X11 DPMS state
+#
+# Running as a normal user will cause silent failures.
+#
+# ------------------------------------------------------------
+# STARTUP ORDER
+# ------------------------------------------------------------
+#
+# • network-online.target
+#     Required so the moOde REST API is reachable
+#
+# • graphical.target
+#     Required so DISPLAY=:0 and xset DPMS queries work
+#
+# ------------------------------------------------------------
+# ENVIRONMENT VARIABLES
+# ------------------------------------------------------------
+#
+# DISPLAY=:0
+#   Points xset to the primary X display
+#
+# XAUTHORITY
+#   Required so root can query X11 state
+#
+# PYTHONDONTWRITEBYTECODE
+#   Prevents creation of .pyc files on the filesystem
+#
+# ------------------------------------------------------------
+# COMMON FAILURE MODES
+# ------------------------------------------------------------
+#
+# • LED does not light at all:
+#     - SPI not enabled (/dev/spidev0.0 missing)
+#     - NeoPixel wiring incorrect
+#
+# • LED stuck amber:
+#     - MPD "Metadata file" disabled
+#     - get_currentsong returns {}
+#
+# • Service crashes repeatedly:
+#     - Missing adafruit-blinka or neopixel_spi
+#
+# ------------------------------------------------------------
+# MANUAL CONTROL
+# ------------------------------------------------------------
+#
+# Restart service:
+#   sudo systemctl restart rgb_moode.service
+#
+# View logs:
+#   journalctl -u rgb_moode.service -n 50 --no-pager
+#
+# ------------------------------------------------------------
+
+[Unit]
+Description=moOde RGB LED Service
+After=network-online.target graphical.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/rgb_moode_service.py
+Restart=always
+RestartSec=2
+User=root
+
+# X11 access for DPMS (screen blank detection)
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/moode/.Xauthority
+
+# Keep filesystem clean
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+[Unit]
+Description=GPIO17 Button -> Toggle moOde display (Peppy/WebUI)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/toggle_display_button.py
+Restart=always
+RestartSec=1
+User=root
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
