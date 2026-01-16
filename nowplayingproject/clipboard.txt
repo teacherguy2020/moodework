@@ -1,1 +1,0 @@
-lastAlbumArtUrl = PAUSE_ART_URL; // prevents immediate overwrite
