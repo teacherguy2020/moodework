@@ -1,6 +1,6 @@
 MoOde "Now Playing"
 
-A distributed, high-performance "What’s Playing" display system for moOde Audio Player, designed for a dedicated full-screen 1080p display (or view on your computer/device) and optimized for Raspberry Pi hardware.
+A distributed, high-performance "Now Playing" display system for moOde Audio Player, designed for a dedicated full-screen 1080p display (or view on your computer/device) and optimized for Raspberry Pi hardware.
 
 This project intentionally separates audio playback, metadata processing, and display rendering across three Raspberry Pi devices for stability, performance, and flexibility.
 
