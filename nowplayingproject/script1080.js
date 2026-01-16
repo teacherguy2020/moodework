@@ -72,9 +72,10 @@ function fetchNowPlaying() {
       // - For files/radio: require play/playing
       // - For AirPlay: allow even if MPD says stop
       const state = String(data.state || '').toLowerCase();
-      const paused = isPausedState(data);
-      // Pause screensaver mode
-      if (ENABLE_PAUSE_SCREENSAVER && paused) {
+      const pauseOrStop = isPauseOrStopState(data);
+
+      // Pause/Stop screensaver mode
+      if (ENABLE_PAUSE_SCREENSAVER && pauseOrStop) {
             if (!pauseMode) setPausedScreensaver(true);
 
             setProgressVisibility(true);   // hide progress bar during pause
@@ -182,9 +183,9 @@ function setModeLogo({ isStream, isAirplay, stationLogoUrl }) {
   logoEl.removeAttribute('src');
 }
  
- function isPausedState(data) {
+function isPauseOrStopState(data) {
   const state = String(data.state || '').toLowerCase();
-  return (state === 'pause' || state === 'paused');
+  return (state === 'pause' || state === 'paused' || state === 'stop' || state === 'stopped' || state === 'idle');
 }
 
 function setPausedScreensaver(on) {
@@ -200,6 +201,7 @@ function setPausedScreensaver(on) {
   const fileInfoText = document.getElementById('file-info-text');
   const hiresBadge = document.getElementById('hires-badge');
   const personnelEl = document.getElementById('personnel-info');
+  
 
   const show = !on;
   if (artistEl) artistEl.style.display = show ? '' : 'none';
@@ -225,6 +227,7 @@ function setPausedScreensaver(on) {
       artEl.style.width = 'auto';
       artEl.style.height = 'auto';
       movePauseArtRandomly(true);
+      artEl.style.opacity = '0.35';   // ← adjust to taste (0.4–0.75 is nice)
     } else {
     
       // restore styles; your CSS will take over again
@@ -236,6 +239,7 @@ function setPausedScreensaver(on) {
       artEl.style.maxHeight = '';
       artEl.style.width = '';
       artEl.style.height = '';
+      artEl.style.opacity = '';
     }
   }
 
