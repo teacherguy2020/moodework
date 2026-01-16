@@ -60,6 +60,8 @@ function fetchNowPlaying() {
 
       const isAirplay = data.isAirplay === true;
       const isStream = data.isStream === true;
+      // Only allow idle screensaver for local files + radio (NOT AirPlay)
+      const screensaverEligible = !isAirplay;
 
       // ✅ Update bottom-right logo EVERY poll
       setModeLogo({
@@ -74,21 +76,29 @@ function fetchNowPlaying() {
       const state = String(data.state || '').toLowerCase();
       const pauseOrStop = isPauseOrStopState(data);
 
-      // Pause/Stop screensaver mode
-      if (ENABLE_PAUSE_SCREENSAVER && pauseOrStop) {
-            if (!pauseMode) setPausedScreensaver(true);
+      if (pauseOrStop && screensaverEligible) {
+            if (!pauseOrStopSinceTs) pauseOrStopSinceTs = Date.now();
 
-            setProgressVisibility(true);   // hide progress bar during pause
-            hideModeLogo();                // hide radio / AirPlay icon
-            movePauseArtRandomly(false);   // drift default art
+            const elapsed = Date.now() - pauseOrStopSinceTs;
+            const delayPassed = elapsed >= PAUSE_SCREENSAVER_DELAY_MS;
 
-            return; // ⛔ stop here -- do NOT update UI while paused
-      } else if (pauseMode) {
-            // Resume from pause
-            setPausedScreensaver(false);
-            justResumedFromPause = true;   // ✅ force one normal UI refresh
-            // fall through to normal handling
-      }
+            if (ENABLE_PAUSE_SCREENSAVER && delayPassed) {
+                  if (!pauseMode) setPausedScreensaver(true);
+
+                  setProgressVisibility(true); // hide progress bar
+                  hideModeLogo();              // hide radio/airplay icon
+                  movePauseArtRandomly(false); // drift default art
+                  return;
+            }
+      } else {
+            // AirPlay, or not paused/stopped => reset + exit screensaver if needed
+            pauseOrStopSinceTs = 0;
+
+            if (pauseMode) {
+                  setPausedScreensaver(false);
+                  justResumedFromPause = true;
+            }
+      } 
       
       // Hide progress for radio and AirPlay
       setProgressVisibility(isStream || isAirplay);
