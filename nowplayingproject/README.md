@@ -9,7 +9,7 @@ This project intentionally separates audio playback, metadata processing, and di
 System Architecture (Three Pis)
 ```
 ┌────────────────────────┐
-│ Pi #1 -- moOde Player   │
+│ Pi #1 -- moOde Player  │
 │ (Audio playback)       │
 │                        │
 │ • MPD / moOde          │
@@ -19,7 +19,7 @@ System Architecture (Three Pis)
           │ HTTP (JSON)
           ▼
 ┌────────────────────────┐
-│ Pi #2 -- API + Web Host │
+│ Pi #2 -- API + Web Host│
 │ (Logic + Metadata)     │
 │                        │
 │ • server.mjs (Node)    │  ← Port 3000
@@ -30,7 +30,7 @@ System Architecture (Three Pis)
           │ HTTP (HTML/JS)
           ▼
 ┌────────────────────────┐
-│ Pi #3 -- Display Node   │
+│ Pi #3 -- Display Node  │
 │ (TV / Monitor)         │
 │                        │
 │ • Chromium kiosk       │
