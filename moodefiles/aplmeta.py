@@ -3,54 +3,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright 2014 The moOde audio player project / Tim Curtis
 #
-# Caller: After starting shairport-sync
-#   cat /tmp/shairport-sync-metadata | shairport-sync-metadata-reader | /var/www/util/aplmeta.py
-#
-# DEBUG
-#   /var/www/util/aplmeta.py 1
-#
-# Shairport-sync.conf (relevant bits)
-#   metadata = {
-#     enabled = "yes";
-#     include_cover_art = "yes";
-#     cover_art_cache_directory = "/var/local/www/imagesw/airplay-covers";
-#     pipe_name = "/tmp/shairport-sync-metadata";
-#     diagnostics = { retain_cover_art = "no"; }
-#   }
-#
-# -------------------------------------------------------------------
-# This is a drop-in replacement for the original aplmeta.py.
-#
-# Original behavior (baseline):
-# - Emit immediately when Title arrives.
-# - Sleep 1 second to allow shairport-sync time to write cover art.
-# - Read "the" cover art file (assumes only one exists when retain_cover_art="no").
-# - Send metadata to the front-end and reset globals.
-#
-# Why changes were made:
-# - Some sources (Safari/YouTube) may NOT provide new artwork for a track. If we simply
-#   reuse the newest cover file, the UI can get "stuck" showing the previous track's art.
-# - Apple Music can deliver metadata in surprising orders:
-#     * cover art can arrive before Persistent ID changes,
-#     * the same track can be "re-announced" with a new PID when opening Now Playing.
-# - Cover art can land slightly after the Title event, producing a "default -> cover" flash
-#   or (worse) a default cover if we check too early.
-# - Garbage/decoded binary fragments sometimes appear in Album/Artist/Title and can overwrite
-#   good metadata unless filtered.
-#
-# Key strategies in this version:
-# - "Settle window": do NOT emit immediately on Title. Wait briefly so metadata/cover can arrive,
-#   then emit ONCE (reduces flashing).
-# - "Fresh-cover rule": only use a cover file if it is fresh for the current track (mtime >= epoch - grace).
-#   This prevents Safari/YouTube from reusing previous track art when no art is provided.
-# - Late PID tolerance: if PID changes shortly after we started settling (or just emitted) and the Title
-#   hasn't changed, treat it as a correction rather than a new track (prevents unnecessary resets/emits).
-# - Optional late refresh: if we emitted default but art appears shortly afterwards for the same PID,
-#   re-emit once with the cover.
-# - NEW cover-write grace poll: right before emitting, if we'd use DEFAULT only because the cover isn't
-#   fresh yet, briefly poll for a fresh cover to appear (helps first track after reboot and occasional late writes).
-# -------------------------------------------------------------------
-#
 # aplmeta.py "settle-window + fresh-cover + pid-aware fragments + late-PID tolerant (+ cover-write grace poll)"
 #
 # Goals:
@@ -104,7 +56,6 @@ persistent_id = None
 picture_bytes = None  # None unknown, 0 none, >0 provided
 
 # Epoch used to decide whether a cover file is "for this track"
-# track_epoch is set at Persistent ID (normal) or first Title (fallback).
 track_epoch = 0.0  # seconds since epoch
 
 # Pending emit state (settle window)
@@ -126,16 +77,13 @@ last_emit_artist = None
 last_emit_album = None
 last_emit_duration = None
 
-
 def debug_msg(msg: str) -> None:
     if DEBUG > 0:
         ts = datetime.now().strftime("%H:%M:%S")
         print(f"{ts} DEBUG: {msg}", flush=True)
 
-
 def safe_decode(raw: bytes) -> str:
     return raw.decode("utf-8", errors="replace") if raw else ""
-
 
 def get_metadata(line: str):
     m = re.match(r'^(Title|Artist|Album Name):\s*"(.*?)"\.$', line)
@@ -146,45 +94,36 @@ def get_metadata(line: str):
     if m:
         return m.group(1), m.group(2).split(" ")[0]
 
-    # Added: Persistent ID (track boundary / late PID corrections)
     m = re.match(r'^(Persistent ID):\s*(0x[0-9a-fA-F]+)\.$', line)
     if m:
         return m.group(1), m.group(2)
 
-    # Added: Picture bytes (explicit "no art" signal and "art is coming" hint)
     m = re.match(r'^Picture received,\s*length\s*(\d+)\s*bytes\.$', line)
     if m:
         return "PictureBytes", m.group(1)
 
     return None, None
 
-
 def cache_bust(url: str) -> str:
-    # Stable per PID: reduces unnecessary UI churn compared to a timestamp.
+    # Stable per PID: reduces unnecessary UI churn.
     pid = persistent_id or "0x0"
     return f"{url}?v={pid}"
-
 
 def looks_garbage(s: str) -> bool:
     """
     Heuristic guard against decode/control-char junk overwriting good metadata.
-    This is needed because we have observed occasional binary/garbled strings in
-    Album/Artist/Title from some sources.
     """
     if s is None:
         return True
     if s == "":
         return False
 
-    # Pure numeric junk (we've seen artist/album become huge integers)
     if s.isdigit() and len(s) >= 6:
         return True
 
-    # Too many replacement chars from decode errors
     if s.count("�") >= 2:
         return True
 
-    # Too many non-printable control chars
     bad = 0
     for ch in s:
         o = ord(ch)
@@ -195,24 +134,16 @@ def looks_garbage(s: str) -> bool:
 
     return False
 
-
 def newest_cover_path() -> str:
     covers = glob.glob(os.path.join(COVERS_LOCAL_ROOT, "cover-*.jpg"))
     if not covers:
         return ""
     return max(covers, key=os.path.getmtime)
 
-
 def newest_cover_path_fresh() -> str:
     """
-    Fresh-cover rule:
     Return newest cover path only if it is "fresh" for this track:
       mtime >= (track_epoch - grace)
-
-    Rationale:
-    - Prevent Safari/YouTube (and other sources) from reusing the previous track's cover
-      when no new art is provided. Even if a cover file exists, we treat it as invalid
-      for this track unless it is recent relative to this track's epoch.
     """
     newest = newest_cover_path()
     if not newest:
@@ -232,19 +163,16 @@ def newest_cover_path_fresh() -> str:
     debug_msg(f"Newest cover is stale (mtime={mtime:.3f} < epoch={track_epoch:.3f}); forcing default")
     return ""
 
-
 def cover_url_from_path(p: str) -> str:
     return cache_bust(COVERS_WEB_ROOT + os.path.basename(p))
-
 
 def default_cover_url() -> str:
     return cache_bust(DEFAULT_COVER_WEB)
 
-
 def choose_cover_url_no_poll() -> str:
     """
     Cover selection:
-    - PictureBytes==0 => source explicitly indicates no picture for this item -> default
+    - PictureBytes==0 => explicitly no picture -> default
     - otherwise use fresh cover if present, else default
     """
     if picture_bytes == 0:
@@ -257,22 +185,14 @@ def choose_cover_url_no_poll() -> str:
 
     return default_cover_url()
 
-
 def maybe_poll_for_fresh_cover(reason: str) -> str:
     """
     NEW: If we are about to use DEFAULT only because the cover is not fresh yet,
     briefly poll for a fresh cover file to appear.
 
-    Rationale:
-    - The original script used a fixed 1s sleep to allow shairport-sync time to write cover art.
-      With the fresh-cover rule, a slightly late write can incorrectly look "stale" (especially on
-      the first track after reboot if an older cover file exists).
-    - Polling is bounded and still requires freshness, so it does not reintroduce
-      "stuck previous cover" behavior.
-
     Safety:
-    - If PictureBytes==0, do NOT poll (source explicitly says no art).
-    - We only accept a cover if newest_cover_path_fresh() considers it fresh.
+    - We STILL require freshness, so this does not reintroduce Safari/YT "stuck previous cover".
+    - If PictureBytes==0 we do NOT poll (source explicitly says no art).
     """
     if picture_bytes == 0:
         return default_cover_url()
@@ -282,6 +202,8 @@ def maybe_poll_for_fresh_cover(reason: str) -> str:
     if p:
         return cover_url_from_path(p)
 
+    # Only poll if there *is* a cover file but it's stale OR none yet.
+    # This is what happens on first track after reboot: old cover exists, new one arrives slightly late.
     deadline = time.time() + COVER_POLL_MAX_SEC
     while time.time() < deadline:
         time.sleep(COVER_POLL_STEP_SEC)
@@ -292,15 +214,12 @@ def maybe_poll_for_fresh_cover(reason: str) -> str:
 
     return default_cover_url()
 
-
 def write_aplmeta_file(metadata_line: str) -> None:
-    # Use atomic replace to avoid partial reads.
     os.makedirs(os.path.dirname(APLMETA_FILE), exist_ok=True)
     tmp = APLMETA_FILE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(metadata_line + "\n")
     os.replace(tmp, APLMETA_FILE)
-
 
 def send_fe_update(metadata_line: str) -> None:
     try:
@@ -313,16 +232,7 @@ def send_fe_update(metadata_line: str) -> None:
     except Exception as e:
         debug_msg(f"send-fecmd exception: {e}")
 
-
 def reset_track_state() -> None:
-    """
-    Reset per-track globals.
-
-    Note:
-    - In the original script, globals reset after each emit.
-    - Here, we also reset pending settle-window state and the fields used for a possible
-      late refresh.
-    """
     global artist, title, album, duration, picture_bytes
     global pending, pending_start, pending_deadline, pending_pid, pending_title_at_start
     global last_emit_title, last_emit_artist, last_emit_album, last_emit_duration
@@ -346,16 +256,7 @@ def reset_track_state() -> None:
     last_emit_duration = None
     last_emit_used_default = False
 
-
 def is_tiny_title_fragment(new_title: str) -> bool:
-    """
-    PID-aware tiny-title fragment filter.
-
-    Rationale:
-    - Some sources can transiently emit short Title fragments.
-    - We only suppress a short title if it occurs right after an emit AND is for the same PID.
-      This avoids suppressing legitimate short titles (e.g. "Red") across track changes.
-    """
     if not new_title:
         return False
     if len(new_title.strip()) >= 6:
@@ -366,15 +267,12 @@ def is_tiny_title_fragment(new_title: str) -> bool:
         return True
     return False
 
-
 def emit_payload(reason: str, t: str, a: str, al: str, dur: str, cover_url: str) -> None:
     global last_emitted, last_emit_ts, last_emit_pid, last_emit_used_default
     global last_emit_title, last_emit_artist, last_emit_album, last_emit_duration
 
-    # Match the original output format (title~~~artist~~~album~~~duration~~~cover_url~~~format)
     metadata = f"{t}~~~{a}~~~{al}~~~{dur}~~~{cover_url}~~~ALAC/AAC"
 
-    # Dedupe: avoid spamming FE with identical payloads.
     if metadata == last_emitted:
         debug_msg(f"Emit({reason}) deduped (unchanged)")
         return
@@ -393,16 +291,7 @@ def emit_payload(reason: str, t: str, a: str, al: str, dur: str, cover_url: str)
     last_emit_album = al
     last_emit_duration = dur
 
-
 def start_settle_window(reason: str) -> None:
-    """
-    Start (or restart) the settle window.
-
-    Rationale:
-    - The original script sleeps 1s and emits as soon as Title is set.
-    - Instead, we delay emission briefly after Title so Album/Artist/Duration/Picture can arrive
-      and we can emit ONCE with a stable payload, reducing flashing.
-    """
     global pending, pending_start, pending_deadline, pending_pid, pending_title_at_start
     now = time.time()
 
@@ -422,12 +311,7 @@ def start_settle_window(reason: str) -> None:
         pending_title_at_start = title
         debug_msg(f"Settle window restarted (pid change) deadline={pending_deadline:.3f}")
 
-
 def maybe_extend_deadline_for_art(reason: str) -> None:
-    """
-    If PictureBytes indicates art is arriving during the settle window, extend slightly
-    (bounded by MAX_WAIT_FOR_ART_SEC from the start) to reduce 'default -> cover' flashes.
-    """
     global pending_deadline
     if not pending:
         return
@@ -439,7 +323,6 @@ def maybe_extend_deadline_for_art(reason: str) -> None:
     if new_deadline > pending_deadline + 0.05:
         pending_deadline = new_deadline
         debug_msg(f"Extended settle deadline for art ({reason}) -> {pending_deadline:.3f}")
-
 
 def emit_pending(reason: str) -> None:
     global pending, pending_start, pending_deadline, pending_pid, pending_title_at_start
@@ -456,13 +339,12 @@ def emit_pending(reason: str) -> None:
         pending = False
         return
 
-    # Normalize like the original script.
     t = title
     al = album if album else "AirPlay Source"
     a = artist if artist else ""
     dur = duration if duration else "0"
 
-    # Choose cover. If it would be DEFAULT due to freshness timing, poll briefly.
+    # Choose cover. If it would be default due to freshness timing, poll briefly.
     cover_url = choose_cover_url_no_poll()
     if cover_url.startswith(DEFAULT_COVER_WEB) and picture_bytes != 0:
         cover_url = maybe_poll_for_fresh_cover("pre-emit")
@@ -475,16 +357,7 @@ def emit_pending(reason: str) -> None:
     pending_pid = None
     pending_title_at_start = None
 
-
 def maybe_late_refresh_on_art(reason: str) -> None:
-    """
-    Optional late refresh:
-    If we emitted default for this PID and art arrives shortly after, re-emit once with art.
-
-    Rationale:
-    - Some sources deliver PictureBytes slightly after our settle deadline.
-    - This keeps transitions smooth without blocking indefinitely.
-    """
     if not persistent_id:
         return
     if not last_emit_pid or persistent_id != last_emit_pid:
@@ -513,14 +386,7 @@ def maybe_late_refresh_on_art(reason: str) -> None:
 
     emit_payload(f"refresh-{reason}", t, a, al, dur, cover_url)
 
-
 def is_late_pid_update(new_pid: str) -> bool:
-    """
-    Late PID tolerance:
-    Apple Music sometimes changes PID after cover/metadata for the same track
-    (especially when opening Now Playing). If Title hasn't changed and the PID change
-    is within a short window, treat it as a correction rather than a new track.
-    """
     now = time.time()
 
     if pending and pending_title_at_start and title and title == pending_title_at_start:
@@ -533,12 +399,10 @@ def is_late_pid_update(new_pid: str) -> bool:
 
     return False
 
-
 def main() -> None:
     global DEBUG, artist, title, album, duration, persistent_id, picture_bytes, track_epoch
     global pending_pid
 
-    # Get debug level (kept compatible with original style)
     if len(sys.argv) > 1:
         if sys.argv[1] == "--version":
             print("aplmeta.py version " + PGM_VERSION)
@@ -551,7 +415,6 @@ def main() -> None:
     debug_msg("Entering while loop...")
 
     while True:
-        # When settling, wake up at the deadline to emit. Otherwise read normally.
         timeout = 0.25
         if pending:
             now = time.time()
@@ -581,17 +444,13 @@ def main() -> None:
 
         if key == "Persistent ID":
             if val != persistent_id:
-                # Late PID tolerance: do not reset epoch/state if this looks like the same track.
                 if persistent_id is not None and is_late_pid_update(val):
                     debug_msg(f"Late PID update detected ({persistent_id} -> {val}); keeping epoch/state")
                     persistent_id = val
-                    # Keep track_epoch as-is; do not reset metadata.
-                    # Ensure pending_pid follows new PID so pending emit isn't canceled.
                     if pending:
                         pending_pid = persistent_id
                     continue
 
-                # New track boundary
                 persistent_id = val
                 track_epoch = time.time()
                 debug_msg(f"PID updated (pid={persistent_id}) track_epoch={track_epoch:.3f}")
@@ -605,11 +464,9 @@ def main() -> None:
                 picture_bytes = None
             debug_msg(f"PictureBytes parsed={picture_bytes}")
 
-            # If we're waiting to emit and art seems to be arriving, extend slightly.
             if pending and picture_bytes and picture_bytes > 0:
                 maybe_extend_deadline_for_art("picturebytes")
 
-            # If we already emitted default, allow a short late refresh.
             if picture_bytes and picture_bytes > 0:
                 maybe_late_refresh_on_art("picturebytes")
             continue
@@ -638,8 +495,6 @@ def main() -> None:
                 debug_msg(f"Reject garbage title='{val}'")
                 continue
 
-            # Fallback: if PID didn't arrive yet, establish an epoch at first Title.
-            # This keeps the fresh-cover rule functional even when ordering is unusual.
             if track_epoch <= 0:
                 track_epoch = time.time()
                 debug_msg(f"track_epoch set from Title={track_epoch:.3f}")
@@ -651,7 +506,6 @@ def main() -> None:
             title = val
             start_settle_window("title")
             continue
-
 
 if __name__ == "__main__":
     try:
