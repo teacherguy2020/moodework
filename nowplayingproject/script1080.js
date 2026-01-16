@@ -1,10 +1,16 @@
-// script1080.js -- DROP-IN (v1.2: background toggle + classical composer/work split + instrument abbreviation expansion)
+// script1080.js -- DROP-IN (v1.3: background toggle + classical composer/work split + instrument abbrev expansion
+//                       + radio redundancy trimming + radio personnel-at-bottom)
 //
 // Keeps your 1.0 behavior, with additions:
 // 1) Classical formatting: if the "artist" side of an "A - B" split contains "Composer: Work",
 //    show Composer on the top line, and Work on the 2nd line (followed by the rest).
 // 2) Expands common orchestral instrument abbreviations (vi, vc, p, ob, etc.) anywhere we display text.
+//    Also handles the case where abbreviations are followed by a separator hyphen (" p - Mozart").
+//    And normalizes hyphen spacing to exactly " - " (your preference).
 // 3) Background toggle: turn background art on/off in one place without changing HTML.
+// 4) Radio UI cleanup:
+//    - If iTunes-derived radio album/label info is present, trim redundant trailing segments on line 2.
+//    - Move radio personnel to the bottom line (consistent with local tracks).
 //
 // Still includes:
 // - Mode logo updated EVERY poll (radio station icon OR airplay.png)
@@ -143,7 +149,12 @@ function setModeLogo({ isStream, isAirplay, stationLogoUrl }) {
  * ========================= */
 
 function normalizeDashSpacing(s) {
-  return String(s || '').replace(/\s*-\s*/g, ' - ').replace(/\s{2,}/g, ' ').trim();
+  // Only normalize separator hyphens that already have spaces around them (or multiple spaces).
+  // Avoid touching things like "(-)" inside parentheses.
+  return String(s || '')
+    .replace(/\s+-\s+/g, ' - ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 }
 
 function escapeRegExp(str) {
@@ -157,8 +168,7 @@ function shortenRadioTitleIfRedundant(titleLine, radioAlbum, radioLabel) {
   const ra = normalizeDashSpacing(radioAlbum);
   const rl = normalizeDashSpacing(radioLabel);
 
-  // Strip trailing " - {radioAlbum}" and/or " - {radioLabel}" if present at end.
-  // Do it safely and only at the end.
+  // Strip trailing " - {radioLabel}" then " - {radioAlbum}" if present at end.
   if (rl) {
     const reLabel = new RegExp(`\\s-\\s${escapeRegExp(rl)}\\s*$`, 'i');
     s = s.replace(reLabel, '').trim();
@@ -168,17 +178,37 @@ function shortenRadioTitleIfRedundant(titleLine, radioAlbum, radioLabel) {
     s = s.replace(reAlbum, '').trim();
   }
 
-  // Collapse any leftover double separators
+  // Clean trailing separators
   s = s.replace(/\s-\s*$/g, '').trim();
 
   return s;
 }
 
 // Radio personnel: prefer radioPerformers if provided; expand abbrevs and normalize separators.
-function buildRadioPersonnelLine(data) {
+function buildRadioPersonnelLine(data, displayTitle) {
   const raw = String(data.radioPerformers || '').trim();
   if (!raw) return '';
-  return expandInstrumentAbbrevs(decodeHtmlEntities(raw));
+
+  const cleaned = expandInstrumentAbbrevs(decodeHtmlEntities(raw));
+  const titleNorm = normalizeDashSpacing(displayTitle || '');
+  const perfNorm  = normalizeDashSpacing(cleaned);
+
+  // 1) If it's already in the title line, don't repeat it.
+  if (perfNorm && titleNorm && titleNorm.toLowerCase().includes(perfNorm.toLowerCase())) {
+    return '';
+  }
+
+  // 2) Heuristic: if it's just a movement marker (Roman numeral / tempo-ish) with no names,
+  // treat it as "part of title", not personnel.
+  const looksLikeMovementOnly =
+    /^[IVXLCDM]+\.\s*/i.test(perfNorm) &&            // "I. ", "VI. "
+    !/[;,]/.test(perfNorm) &&                        // no list delimiters
+    !/\b(orchestra|ensemble|choir|quartet|trio|dir|conduct)\b/i.test(perfNorm) &&
+    !/[A-ZÀ-ÖØ-Þ][a-zà-öø-ÿ]+/.test(perfNorm.replace(/^[IVXLCDM]+\.\s*/i, '').trim()); // no obvious name after numeral
+
+  if (looksLikeMovementOnly) return '';
+
+  return cleaned;
 }
 
 // Optional: if the title line contains "... - Patrick, cl; ... - Album - Label",
@@ -186,9 +216,7 @@ function buildRadioPersonnelLine(data) {
 function removeInlinePersonnelFromTitleLine(titleLine) {
   const s = normalizeDashSpacing(titleLine);
 
-  // Detect the start of a "performers; performers" block (common WFMT pattern)
   // Example: "Work - Patrick Messina, cl; Lise Berthaud, vi; ... - Mozart, Bruch - Aparte"
-  // We'll cut it so the 2nd line stays compact.
   const idx = s.search(/\s-\s[^-]+,\s*[a-z]{1,4}\s*;/i);
   if (idx >= 0) return s.slice(0, idx).trim();
 
@@ -252,6 +280,10 @@ function splitArtistDashTitle(s) {
   return null;
 }
 
+/* =========================
+ * Instrument abbreviation expansion
+ * ========================= */
+
 function expandInstrumentAbbrevs(input) {
   let s = String(input || '');
   if (!s) return s;
@@ -267,7 +299,7 @@ function expandInstrumentAbbrevs(input) {
     ['cl', 'clarinet'],
     ['bcl','bass clarinet'],
     ['fl', 'flute'],
-    ['g', 'guitar'],
+    ['g',  'guitar'],
     ['pic', 'piccolo'],
     ['bn', 'bassoon'],
     ['cbsn', 'contrabassoon'],
@@ -295,7 +327,7 @@ function expandInstrumentAbbrevs(input) {
   ];
 
   // Expand only when it's a standalone token preceded by start/space/punct,
-  // and followed by punctuation, end, OR a separator hyphen (with or without spaces).
+  // and followed by punctuation/end OR a separator hyphen.
   for (const [abbr, full] of reps) {
     const re = new RegExp(
       `(^|[\\s,;])${abbr}(?=\\s*(?:[;,)\\]]|\\-|$))`,
@@ -304,8 +336,9 @@ function expandInstrumentAbbrevs(input) {
     s = s.replace(re, `$1${full}`);
   }
 
-  // Normalize hyphen separators to exactly " - " (your preference)
-  s = s.replace(/\s*-\s*/g, ' - ');
+  // Normalize only separator hyphens that already have whitespace around them.
+  // This preserves things like "(-)".
+  s = s.replace(/\s+-\s+/g, ' - ');
 
   // Collapse extra whitespace introduced by replacements
   s = s.replace(/\s{2,}/g, ' ').trim();
@@ -424,22 +457,22 @@ function updateUI(data) {
   let displayArtist = data.artist || '';
   let displayTitle  = data.title || '';
 
-if (isStream) {
-  const stable = data._radioDisplay || stabilizeRadioDisplay(data);
+  if (isStream) {
+    const stable = data._radioDisplay || stabilizeRadioDisplay(data);
 
-  displayArtist = stable.artist || (data.album || 'Radio Stream');
-  displayTitle  = stable.title || decodeHtmlEntities(data.title || '');
+    displayArtist = stable.artist || (data.album || 'Radio Stream');
+    displayTitle  = stable.title || decodeHtmlEntities(data.title || '');
 
-  // If we have iTunes album/label info, avoid repeating it on line 2.
-  // Also keep long instrument personnel out of line 2 (we show it at the bottom now).
-  const ra = String(data.radioAlbum || '').trim();
-  const rl = String(data.radioLabel || '').trim();
+    // If we have iTunes album/label info, avoid repeating it on line 2.
+    // Also keep long instrument personnel out of line 2 (we show it at the bottom now).
+    const ra = String(data.radioAlbum || '').trim();
+    const rl = String(data.radioLabel || '').trim();
 
-  displayTitle = removeInlinePersonnelFromTitleLine(displayTitle);
-  if (ra || rl) {
-    displayTitle = shortenRadioTitleIfRedundant(displayTitle, ra, rl);
+    displayTitle = removeInlinePersonnelFromTitleLine(displayTitle);
+    if (ra || rl) {
+      displayTitle = shortenRadioTitleIfRedundant(displayTitle, ra, rl);
+    }
   }
-}
 
   if (isAirplay && !displayTitle) displayTitle = 'AirPlay';
 
@@ -518,30 +551,30 @@ if (isStream) {
     }
   }
 
-// ----------------------------
-// Personnel (local + radio)
-// ----------------------------
-if (personnelEl) {
-  if (isAirplay) {
-    // AirPlay: no personnel
-    personnelEl.textContent = '';
-  } else if (isStream) {
-    // Radio: show radioPerformers (if present) at bottom, consistent with local tracks.
-    const radioPersonnel = buildRadioPersonnelLine(data);
-    personnelEl.textContent = radioPersonnel ? decodeHtmlEntities(radioPersonnel) : '';
-  } else {
-    // Local files: unchanged behavior
-    const personnel = Array.isArray(data.personnel) ? data.personnel : [];
-    const producer = (data.producer && String(data.producer).trim())
-      ? [`Producer: ${String(data.producer).trim()}`]
-      : [];
-    const combined = [...personnel, ...producer]
-      .filter(Boolean)
-      .map(expandInstrumentAbbrevs);
+  // ----------------------------
+  // Personnel (local + radio)
+  // ----------------------------
+  if (personnelEl) {
+    if (isAirplay) {
+      // AirPlay: no personnel
+      personnelEl.textContent = '';
+    } else if (isStream) {
+      // Radio: show radioPerformers (if present) at bottom, consistent with local tracks.
+      const radioPersonnel = buildRadioPersonnelLine(data, displayTitle);
+      personnelEl.textContent = radioPersonnel ? decodeHtmlEntities(radioPersonnel) : '';
+    } else {
+      // Local files: unchanged behavior
+      const personnel = Array.isArray(data.personnel) ? data.personnel : [];
+      const producer = (data.producer && String(data.producer).trim())
+        ? [`Producer: ${String(data.producer).trim()}`]
+        : [];
+      const combined = [...personnel, ...producer]
+        .filter(Boolean)
+        .map(expandInstrumentAbbrevs);
 
-    personnelEl.textContent = combined.length ? decodeHtmlEntities(combined.join(' • ')) : '';
+      personnelEl.textContent = combined.length ? decodeHtmlEntities(combined.join(' • ')) : '';
+    }
   }
-}
 
   // ----------------------------
   // Art (background toggle supported)
