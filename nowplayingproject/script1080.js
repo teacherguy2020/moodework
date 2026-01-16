@@ -24,6 +24,9 @@ const ENABLE_PAUSE_SCREENSAVER = true;
 const PAUSE_ART_URL = 'http://10.0.0.254/images/default-album-cover.png'; // <-- set to your moOde default jpg/png
 const PAUSE_MOVE_INTERVAL_MS = 8000; // move every 8s
 const PAUSE_ART_MIN_MARGIN_PX = 20;  // keep away from edges a bit
+// Delay before screensaver engages after PAUSE/STOP (ms)
+const PAUSE_SCREENSAVER_DELAY_MS = 5000; // e.g. 5s (set to 0 for instant)
+let pauseOrStopSinceTs = 0;
 let pauseMode = false;
 let lastPauseMoveTs = 0;
 let justResumedFromPause = false;
@@ -75,12 +78,18 @@ function fetchNowPlaying() {
       // - For AirPlay: allow even if MPD says stop
       const state = String(data.state || '').toLowerCase();
       const pauseOrStop = isPauseOrStopState(data);
+      console.log(
+            'state=', state,
+            'pauseOrStop=', pauseOrStop,
+            'eligible=', screensaverEligible
+      );
 
       if (pauseOrStop && screensaverEligible) {
             if (!pauseOrStopSinceTs) pauseOrStopSinceTs = Date.now();
 
             const elapsed = Date.now() - pauseOrStopSinceTs;
-            const delayPassed = elapsed >= PAUSE_SCREENSAVER_DELAY_MS;
+            const delayMs = Number(PAUSE_SCREENSAVER_DELAY_MS) || 0;
+            const delayPassed = elapsed >= delayMs;
 
             if (ENABLE_PAUSE_SCREENSAVER && delayPassed) {
                   if (!pauseMode) setPausedScreensaver(true);
