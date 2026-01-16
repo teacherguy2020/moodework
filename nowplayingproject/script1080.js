@@ -1,17 +1,23 @@
-// script1080.js — DROP-IN (v1.1: classical composer/work split + instrument abbreviation expansion)
+// script1080.js -- DROP-IN (v1.2: background toggle + classical composer/work split + instrument abbreviation expansion)
 //
-// Keeps your 1.0 behavior, with two additions:
+// Keeps your 1.0 behavior, with additions:
 // 1) Classical formatting: if the "artist" side of an "A - B" split contains "Composer: Work",
 //    show Composer on the top line, and Work on the 2nd line (followed by the rest).
 // 2) Expands common orchestral instrument abbreviations (vi, vc, p, ob, etc.) anywhere we display text.
+// 3) Background toggle: turn background art on/off in one place without changing HTML.
 //
 // Still includes:
 // - Mode logo updated EVERY poll (radio station icon OR airplay.png)
 // - AirPlay MPD state="stop" safe (won't clear UI)
 // - Progress bar hidden for radio + AirPlay
 
-const NOW_PLAYING_URL = 'http://YOURFLASKSERVERIP:3000/now-playing';
-const AIRPLAY_ICON_URL = 'http://YOURWEBSERVERIP:8000/airplay.png?v=1';
+const NOW_PLAYING_URL = 'http://10.0.0.233:3000/now-playing';
+const AIRPLAY_ICON_URL = 'http://10.0.0.233:8000/airplay.png?v=1';
+
+/* =========================
+ * Feature toggles
+ * ========================= */
+const ENABLE_BACKGROUND_ART = true; // ← set false to disable background updates entirely
 
 let currentTrackKey = '';
 let lastAlbumArtUrl = '';
@@ -24,6 +30,7 @@ const radioState = {
 };
 
 window.addEventListener('load', () => {
+  applyBackgroundToggleClass();
   attachClickEventToAlbumArt();
   fetchNowPlaying();
   setInterval(fetchNowPlaying, 1000);
@@ -62,6 +69,7 @@ function fetchNowPlaying() {
       // Hide progress for radio and AirPlay
       setProgressVisibility(isStream || isAirplay);
 
+      // Update progress for FILE playback only
       if (!isStream && !isAirplay) {
         if (typeof data.percent === 'number') {
           updateProgressBarPercent(data.percent);
@@ -134,6 +142,59 @@ function setModeLogo({ isStream, isAirplay, stationLogoUrl }) {
  * Helpers
  * ========================= */
 
+function normalizeDashSpacing(s) {
+  return String(s || '').replace(/\s*-\s*/g, ' - ').replace(/\s{2,}/g, ' ').trim();
+}
+
+function escapeRegExp(str) {
+  return String(str || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// If iTunes album/label is available, remove redundant trailing segments like:
+// " ... - Mozart, Bruch - Aparte" because album+label appear on line 3 already.
+function shortenRadioTitleIfRedundant(titleLine, radioAlbum, radioLabel) {
+  let s = normalizeDashSpacing(titleLine);
+  const ra = normalizeDashSpacing(radioAlbum);
+  const rl = normalizeDashSpacing(radioLabel);
+
+  // Strip trailing " - {radioAlbum}" and/or " - {radioLabel}" if present at end.
+  // Do it safely and only at the end.
+  if (rl) {
+    const reLabel = new RegExp(`\\s-\\s${escapeRegExp(rl)}\\s*$`, 'i');
+    s = s.replace(reLabel, '').trim();
+  }
+  if (ra) {
+    const reAlbum = new RegExp(`\\s-\\s${escapeRegExp(ra)}\\s*$`, 'i');
+    s = s.replace(reAlbum, '').trim();
+  }
+
+  // Collapse any leftover double separators
+  s = s.replace(/\s-\s*$/g, '').trim();
+
+  return s;
+}
+
+// Radio personnel: prefer radioPerformers if provided; expand abbrevs and normalize separators.
+function buildRadioPersonnelLine(data) {
+  const raw = String(data.radioPerformers || '').trim();
+  if (!raw) return '';
+  return expandInstrumentAbbrevs(decodeHtmlEntities(raw));
+}
+
+// Optional: if the title line contains "... - Patrick, cl; ... - Album - Label",
+// remove the detailed instrument list from the title line by cutting at the first " - Name, xx;"
+function removeInlinePersonnelFromTitleLine(titleLine) {
+  const s = normalizeDashSpacing(titleLine);
+
+  // Detect the start of a "performers; performers" block (common WFMT pattern)
+  // Example: "Work - Patrick Messina, cl; Lise Berthaud, vi; ... - Mozart, Bruch - Aparte"
+  // We'll cut it so the 2nd line stays compact.
+  const idx = s.search(/\s-\s[^-]+,\s*[a-z]{1,4}\s*;/i);
+  if (idx >= 0) return s.slice(0, idx).trim();
+
+  return s;
+}
+
 function decodeHtmlEntities(str) {
   if (!str) return '';
   const txt = document.createElement('textarea');
@@ -191,10 +252,6 @@ function splitArtistDashTitle(s) {
   return null;
 }
 
-/* =========================
- * Instrument abbreviation expansion
- * ========================= */
-
 function expandInstrumentAbbrevs(input) {
   let s = String(input || '');
   if (!s) return s;
@@ -223,8 +280,10 @@ function expandInstrumentAbbrevs(input) {
     ['timp','timpani'],
     ['vln','violin'],
     ['vn', 'violin'],
+    ['v',  'violin'],
     ['vla','viola'],
     ['va', 'viola'],
+    // ⚠️ ambiguous; in your WFMT examples it's typically viola.
     ['vi', 'viola'],
     ['sop','soprano'],
     ['mez','mezzo-soprano'],
@@ -234,21 +293,20 @@ function expandInstrumentAbbrevs(input) {
     ['bs', 'bass'],
   ];
 
+  // Expand only when it's a standalone token preceded by start/space/punct,
+  // and followed by punctuation, end, OR a separator hyphen (with or without spaces).
   for (const [abbr, full] of reps) {
-    // Matches tokens like:
-    // ", vi;"  ", vi)"  " vi;"  " vi,"  " vi" (end)  ", p -"  ", cl -"
     const re = new RegExp(
-      `([,;\\s])${abbr}(?=\\s*(?:[;,)\\]]|\\-|$))`,
+      `(^|[\\s,;])${abbr}(?=\\s*(?:[;,)\\]]|\\-|$))`,
       'gi'
     );
     s = s.replace(re, `$1${full}`);
   }
 
-  // Ensure exactly one space around separator hyphens
-  // (prevents "p- Mozart" or "p -Mozart" variants)
+  // Normalize hyphen separators to exactly " - " (your preference)
   s = s.replace(/\s*-\s*/g, ' - ');
 
-  // Optional: collapse any doubles created by replacements
+  // Collapse extra whitespace introduced by replacements
   s = s.replace(/\s{2,}/g, ' ').trim();
 
   return s;
@@ -261,7 +319,7 @@ function expandInstrumentAbbrevs(input) {
 function stabilizeRadioDisplay(data) {
   const stationKey = `${data.file}|${data.album || ''}`;
   const incomingRaw = decodeHtmlEntities(String(data.title || '').trim());
-  const incoming = incomingRaw; // (already decoded)
+  const incoming = incomingRaw;
 
   if (radioState.key !== stationKey) {
     radioState.key = stationKey;
@@ -279,9 +337,6 @@ function stabilizeRadioDisplay(data) {
   // First: try plain "A - B" split (what most stations do)
   const dashSplit = splitArtistDashTitle(incoming);
   if (dashSplit) {
-    // Classical nicety:
-    // If left side contains "Composer: Work", split on first colon to make:
-    // Artist = Composer, Title = Work — (rest of dashSplit.title)
     const left = dashSplit.artist || '';
     const right = dashSplit.title || '';
 
@@ -290,14 +345,12 @@ function stabilizeRadioDisplay(data) {
       const composer = left.slice(0, colonIdx).trim();
       const work = left.slice(colonIdx + 1).trim();
 
-      // Heuristic: only do this when it looks like a real composer name (keeps pop stations unchanged)
-      // (Composer names usually have at least 2 words and a capital start)
       const looksComposer = /^[A-ZÀ-ÖØ-Þ]/.test(composer) && composer.split(/\s+/).length >= 2;
 
       if (looksComposer && work) {
         return {
           artist: composer,
-          title: right ? `${work} — ${right}` : work
+          title: right ? `${work} -- ${right}` : work
         };
       }
     }
@@ -305,7 +358,7 @@ function stabilizeRadioDisplay(data) {
     return dashSplit;
   }
 
-  // Fallback logic from your 1.0 (helpful for some classical station flip-flops)
+  // Fallback logic for some classical station flip-flops
   const uniq = [...new Set(radioState.recentTitles)].slice(-2);
   if (uniq.length === 2) {
     const [a, b] = uniq;
@@ -326,6 +379,18 @@ function stabilizeRadioDisplay(data) {
 
   const station = data.album || 'Radio Stream';
   return { artist: station, title: incoming };
+}
+
+/* =========================
+ * Background toggle (CSS class)
+ * ========================= */
+
+function applyBackgroundToggleClass() {
+  if (!ENABLE_BACKGROUND_ART) {
+    document.body.classList.add('no-bg');
+  } else {
+    document.body.classList.remove('no-bg');
+  }
 }
 
 /* =========================
@@ -358,11 +423,22 @@ function updateUI(data) {
   let displayArtist = data.artist || '';
   let displayTitle  = data.title || '';
 
-  if (isStream) {
-    const stable = data._radioDisplay || stabilizeRadioDisplay(data);
-    displayArtist = stable.artist || (data.album || 'Radio Stream');
-    displayTitle  = stable.title || decodeHtmlEntities(data.title || '');
+if (isStream) {
+  const stable = data._radioDisplay || stabilizeRadioDisplay(data);
+
+  displayArtist = stable.artist || (data.album || 'Radio Stream');
+  displayTitle  = stable.title || decodeHtmlEntities(data.title || '');
+
+  // If we have iTunes album/label info, avoid repeating it on line 2.
+  // Also keep long instrument personnel out of line 2 (we show it at the bottom now).
+  const ra = String(data.radioAlbum || '').trim();
+  const rl = String(data.radioLabel || '').trim();
+
+  displayTitle = removeInlinePersonnelFromTitleLine(displayTitle);
+  if (ra || rl) {
+    displayTitle = shortenRadioTitleIfRedundant(displayTitle, ra, rl);
   }
+}
 
   if (isAirplay && !displayTitle) displayTitle = 'AirPlay';
 
@@ -441,25 +517,33 @@ function updateUI(data) {
     }
   }
 
-  // ----------------------------
-  // Personnel (unchanged)
-  // ----------------------------
-  if (personnelEl) {
-    if (isStream || isAirplay) {
-      personnelEl.textContent = '';
-    } else {
-      const personnel = Array.isArray(data.personnel) ? data.personnel : [];
-      const producer = (data.producer && String(data.producer).trim())
-        ? [`Producer: ${String(data.producer).trim()}`]
-        : [];
-      const combined = [...personnel, ...producer].filter(Boolean)
-        .map(expandInstrumentAbbrevs);
-      personnelEl.textContent = combined.length ? decodeHtmlEntities(combined.join(' • ')) : '';
-    }
+// ----------------------------
+// Personnel (local + radio)
+// ----------------------------
+if (personnelEl) {
+  if (isAirplay) {
+    // AirPlay: no personnel
+    personnelEl.textContent = '';
+  } else if (isStream) {
+    // Radio: show radioPerformers (if present) at bottom, consistent with local tracks.
+    const radioPersonnel = buildRadioPersonnelLine(data);
+    personnelEl.textContent = radioPersonnel ? decodeHtmlEntities(radioPersonnel) : '';
+  } else {
+    // Local files: unchanged behavior
+    const personnel = Array.isArray(data.personnel) ? data.personnel : [];
+    const producer = (data.producer && String(data.producer).trim())
+      ? [`Producer: ${String(data.producer).trim()}`]
+      : [];
+    const combined = [...personnel, ...producer]
+      .filter(Boolean)
+      .map(expandInstrumentAbbrevs);
+
+    personnelEl.textContent = combined.length ? decodeHtmlEntities(combined.join(' • ')) : '';
   }
+}
 
   // ----------------------------
-  // Art (unchanged)
+  // Art (background toggle supported)
   // ----------------------------
   const newArtUrl =
     (data.altArtUrl && String(data.altArtUrl).trim())
@@ -472,12 +556,18 @@ function updateUI(data) {
     lastAlbumArtUrl = newArtUrl;
 
     if (artEl) artEl.src = newArtUrl;
-    if (bgEl) bgEl.style.backgroundImage = `url("${newArtUrl}")`;
 
-    if (artBgEl) {
-      artBgEl.style.backgroundImage = `url("${newArtUrl}")`;
-      artBgEl.style.backgroundSize = 'cover';
-      artBgEl.style.backgroundPosition = 'center';
+    if (ENABLE_BACKGROUND_ART) {
+      if (bgEl) bgEl.style.backgroundImage = `url("${newArtUrl}")`;
+      if (artBgEl) {
+        artBgEl.style.backgroundImage = `url("${newArtUrl}")`;
+        artBgEl.style.backgroundSize = 'cover';
+        artBgEl.style.backgroundPosition = 'center';
+      }
+    } else {
+      // Hard-disable background updates
+      if (bgEl) bgEl.style.backgroundImage = 'none';
+      if (artBgEl) artBgEl.style.backgroundImage = 'none';
     }
   }
 }
@@ -539,8 +629,10 @@ function clearUI() {
   }
   if (personnelEl) personnelEl.textContent = '';
   if (progressFill) progressFill.style.width = '0%';
+
   if (bgEl) bgEl.style.backgroundImage = 'none';
   if (artBgEl) artBgEl.style.backgroundImage = 'none';
+
   if (logoEl) {
     logoEl.style.display = 'none';
     logoEl.removeAttribute('src');
