@@ -142,6 +142,7 @@ PI4_MOUNT_BASE  = '/mnt/YOURMUSICDRIVE'
 These must match how moOde reports file paths.
 
 ⸻
+Be sure to enter your IP info in the files.
 
 Start the API server (Port 3000)
 
