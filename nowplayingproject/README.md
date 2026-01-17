@@ -182,8 +182,7 @@ pm2 save
 
 Test:
 ```
-  curl http://<PI2_IP>:3000/now-playing | jq
-  
+  curl http://<PI2_IP>:3000/now-playing | jq 
 ```
 
 ⸻
