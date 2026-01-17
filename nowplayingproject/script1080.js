@@ -60,9 +60,72 @@ const radioState = {
 window.addEventListener('load', () => {
   applyBackgroundToggleClass();
   attachClickEventToAlbumArt();
-  fetchNowPlaying();
-  setInterval(fetchNowPlaying, 1000);
+
+  // Don't start the 1s poll / don't show UI until first background art is ready
+  bootThenStart();
 });
+
+
+async function bootThenStart() {
+  // Get one snapshot
+  const data = await fetch(NOW_PLAYING_URL, { cache: 'no-store' })
+    .then(r => (r.ok ? r.json() : null))
+    .catch(() => null);
+
+  // If we couldn't fetch, fail-safe: show UI and start polling anyway
+  if (!data) {
+    document.body.classList.remove('booting');
+    document.body.classList.add('ready');
+    fetchNowPlaying();
+    setInterval(fetchNowPlaying, 1000);
+    return;
+  }
+
+  // Match the same art decision used in updateUI()
+  const firstArtUrl =
+    (data.altArtUrl && String(data.altArtUrl).trim())
+      ? String(data.altArtUrl).trim()
+      : (data.albumArtUrl || '');
+
+  // If bg art disabled or no art available, don't wait
+  if (!ENABLE_BACKGROUND_ART || !firstArtUrl) {
+    updateUI(data);
+    document.body.classList.remove('booting');
+    document.body.classList.add('ready');
+    setInterval(fetchNowPlaying, 1000);
+    return;
+  }
+
+  // Preload the background image
+  await preloadImage(firstArtUrl);
+
+  // Apply background once before first paint
+  const bgEl = document.getElementById('background-image');
+  const artBgEl = document.getElementById('album-art-bg');
+  if (bgEl) bgEl.style.backgroundImage = `url("${firstArtUrl}")`;
+  if (artBgEl) {
+    artBgEl.style.backgroundImage = `url("${firstArtUrl}")`;
+    artBgEl.style.backgroundSize = 'cover';
+    artBgEl.style.backgroundPosition = 'center';
+  }
+
+  // Now paint the rest of the UI
+  updateUI(data);
+
+  document.body.classList.remove('booting');
+  document.body.classList.add('ready');
+
+  setInterval(fetchNowPlaying, 1000);
+}
+
+function preloadImage(url) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => resolve(true);
+    img.onerror = () => resolve(false);
+    img.src = url;
+  });
+}
 
 function fetchNowPlaying() {
   fetch(NOW_PLAYING_URL, { cache: 'no-store' })
