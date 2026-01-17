@@ -2,247 +2,306 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Now Playing 1080</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Now Playing 1080</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
 
-<style>
-/* Hide everything until first background is ready */
-body.booting #content { opacity: 0; }
-body.booting #background-image { opacity: 0; }
-body.ready  #content,
-body.ready  #background-image { opacity: 1; transition: opacity 500ms ease; }
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body {
-  height: 100vh; width: 100vw; overflow: hidden;
-  background: black; color: white; font-family: 'Inter', sans-serif;
-  position: relative;
-}
+  <style>
+    /* Base reset + defaults */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
 
+    body {
+      height: 100vh;
+      width: 100vw;
+      overflow: hidden;
+      background: black;
+      color: white;
+      font-family: 'Inter', sans-serif;
+      position: relative;
+    }
 
-/* Full-screen blurred background (set via JS) */
-#background-image {
-  position: fixed;
-  top: 0; left: 0;
-  width: 100%;
-  height: 100%;
+    /* Boot gating:
+       - #content fades in once (boot only)
+       - background layers are hidden during boot
+       - AFTER boot, JS controls bg opacity + crossfade
+    */
 
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-  background-color: black;
+    /* Boot: hide everything */
+    body.booting #content {
+      opacity: 0;
+      transition: opacity 500ms ease;
+    }
 
-  filter: blur(35px) brightness(0.1);
-  transform: scale(1.08);
+    body.booting #background-a,
+    body.booting #background-b {
+      opacity: 0;
+    }
 
-  z-index: -2;
-}
+    /* Ready: show content, but do NOT leave a transition on it (prevents later re-fades) */
+    body.ready #content {
+      opacity: 1;
+      transition: none;
+    }
 
-#album-art-wrapper {
-  width: 700px;
-  height: 700px;
-  flex-shrink: 0;
-  position: relative;
-  overflow: hidden;
-}
+    /* IMPORTANT:
+       - Do NOT force background opacity in body.ready.
+       - setBackgroundCrossfade() owns background-a/background-b opacity and transitions.
+    */
 
-#album-art {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  border-radius: 32px;
-  box-shadow: 0 40px 100px rgba(0,0,0,0.9);
-  cursor: pointer;
-  transition: transform 0.3s ease;
-}
+    /* Disable element fades during boot; boot gating owns visibility */
+    body.booting .fade-in,
+    body.booting .fade-out {
+      transition: none !important;
+    }
 
-#album-art-bg {
-  position: absolute;
-  top: 0; left: 0;
-  width: 100%;
-  height: 100%;
-  border-radius: 32px;
-  filter: blur(50px) brightness(0.2);
-  z-index: -1;
-  transition: none;
-}
+    /* Optional (only matters if JS toggles these later) */
+    body.ready .fade-in { opacity: 1; }
+    body.ready .fade-out { opacity: 0; }
 
-#content {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: left;
-  width: 100%;
-  height: 100%;
-  padding-left: 100px;
-  padding-right: 100px;
-  gap: 100px;
-  z-index: 1;
-}
+    #background-a,
+    #background-b {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-size: cover;
+      background-position: center;
+      background-repeat: no-repeat;
+      background-color: black;
 
-.text-column {
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-start;
-  align-items: flex-start;
-  gap: 20px;
-  height: 700px;            /* align with album art */
-  width: 100%;
-  max-width: 1100px;
+      filter: blur(18px) brightness(0.1);
+      transform: scale(1.08);
 
-  position: relative;       /* anchor for absolute-positioned elements */
-  padding-bottom: 24px;     /* breathing room above bottom edge (also for Next Up overlay) */
-}
+      z-index: -2;
+      opacity: 0;                       /* default hidden; JS decides which is visible */
+      transition: opacity 800ms ease;   /* keep crossfade always enabled */
+    }
 
-#artist-name { font-size: 60px; font-weight: 600; text-shadow: 0 4px 14px rgba(0,0,0,0.9); }
-#track-title { font-size: 50px; font-weight: 600; text-shadow: 0 3px 12px rgba(0,0,0,0.9); }
-#album-link  { font-size: 48px; color: #ccc; text-decoration: none; text-shadow: 0 2px 10px rgba(0,0,0,0.8); }
-#file-info   { font-size: 36px; font-weight: 600; color: #aaa; text-shadow: 0 2px 8px rgba(0,0,0,0.8); }
+    #album-art-wrapper {
+      width: 700px;
+      height: 700px;
+      flex-shrink: 0;
+      position: relative;
+      overflow: hidden;
+    }
 
-.hires-badge {
-  display: inline-block;
-  background-color: gold;
-  color: black;
-  font-size: 0.6em;
-  padding: 1px 4px;
-  margin-left: 8px;
-  border: 2px solid #b8860b;
-  border-radius: 6px;
-  position: relative;
-  top: -6px;
-}
+    #album-art {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      border-radius: 32px;
+      box-shadow: 0 40px 100px rgba(0,0,0,0.9);
+      cursor: pointer;
+      transition: transform 0.3s ease;
+    }
 
-#personnel-info {
-  font-size: 18px;
-  color: #ccc;
-  line-height: 1.4;
-  word-wrap: break-word;
-  display: block;
-  margin-bottom: 12px;
-  margin-right: 100px;
-}
+    #album-art-bg {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      border-radius: 32px;
+      filter: blur(18px) brightness(0.2);
+      z-index: -1;
+      transition: none;
+    }
 
-/* ===== Next Up overlay ===== */
-:root{
-  --nextup-left-pad: 0px;        /* align with left edge of text column */
-  --nextup-bottom-gap: 37px;     /* vertical gap above progress bar (was 32; +5px per request) */
-}
+    #content {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      justify-content: left;
+      width: 100%;
+      height: 100%;
+      padding-left: 100px;
+      padding-right: 100px;
+      gap: 100px;
+      z-index: 1;
+    }
 
-#next-up{
-  position: absolute;
-  left: var(--nextup-left-pad);
+    .text-column {
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      align-items: flex-start;
+      gap: 20px;
+      height: 700px;            /* align with album art */
+      width: 100%;
+      max-width: 1100px;
 
-  /* sit above the progress bar (8px bar height) */
-  bottom: calc(8px + var(--nextup-bottom-gap));
+      position: relative;       /* anchor for absolute-positioned elements */
+      padding-bottom: 24px;     /* breathing room above bottom edge (also for Next Up overlay) */
+    }
 
-  width: 100%;                  /* match text column width */
-  display: flex;
-  align-items: center;
-  gap: 14px;
+    #artist-name {
+      font-size: 60px;
+      font-weight: 600;
+      text-shadow: 0 4px 14px rgba(0,0,0,0.9);
+    }
 
-  font-size: 26px;
-  font-weight: 600;
-  color: rgba(255,255,255,0.92);
-  text-shadow: 0 2px 10px rgba(0,0,0,0.85);
+    #track-title {
+      font-size: 50px;
+      font-weight: 600;
+      text-shadow: 0 3px 12px rgba(0,0,0,0.9);
+    }
 
-  z-index: 15;
+    #album-link {
+      font-size: 48px;
+      color: #ccc;
+      text-decoration: none;
+      text-shadow: 0 2px 10px rgba(0,0,0,0.8);
+    }
 
-  border-radius: 12px;
-  background: transparent !important;
-  backdrop-filter: blur(6px);   /* blur-only bubble */
-}
+    #file-info {
+      font-size: 36px;
+      font-weight: 600;
+      color: #aaa;
+      text-shadow: 0 2px 8px rgba(0,0,0,0.8);
+    }
 
-#next-up-img{
-  width: 75px;
-  height: 75px;
-  border-radius: 12px;
-  object-fit: cover;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.6);
-  flex-shrink: 0;
-  display: none;                /* hidden until we have art */
-}
+    .hires-badge {
+      display: inline-block;
+      background-color: gold;
+      color: black;
+      font-size: 0.6em;
+      padding: 1px 4px;
+      margin-left: 8px;
+      border: 2px solid #b8860b;
+      border-radius: 6px;
+      position: relative;
+      top: -6px;
+    }
 
-#next-up-text{
-  flex: 1;
-  min-width: 0;                 /* allows ellipsis in flex */
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 900px;             /* controls where ellipses start */
-}
+    #personnel-info {
+      font-size: 18px;
+      color: #ccc;
+      line-height: 1.4;
+      word-wrap: break-word;
+      display: block;
+      margin-bottom: 12px;
+      margin-right: 100px;
+    }
 
-/* Progress Bar */
-#progress-bar-wrapper {
-  width: 900px;
-  height: 8px;
-  background: rgba(255,255,255,0.15);
-  border-radius: 4px;
-  overflow: hidden;
-  margin-top: auto; /* push to bottom of column when visible */
-}
+    /* ===== Next Up overlay ===== */
+    :root {
+      --nextup-left-pad: 0px;        /* align with left edge of text column */
+      --nextup-bottom-gap: 37px;     /* vertical gap above progress bar */
+    }
 
-#progress-fill {
-  height: 12px;                 /* KEEP 12px per your request */
-  width: 100%;
-  background: #4fc3f7;
-  transform: scaleX(0);
-  transform-origin: left center;
-  will-change: transform;
-  border-radius: 3px;
-  transition: none;
-}
+    #next-up {
+      position: absolute;
+      left: var(--nextup-left-pad);
+      bottom: calc(8px + var(--nextup-bottom-gap));
 
-/* Bottom-right mode logo (Radio icon or AirPlay icon) */
-#mode-logo {
-  width: 100px;
-  height: 100px;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 14px;
 
-  border-radius: 16px;
-  object-fit: cover;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+      font-size: 26px;
+      font-weight: 600;
+      color: rgba(255,255,255,0.92);
+      text-shadow: 0 2px 10px rgba(0,0,0,0.85);
 
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  opacity: 0.9;
+      z-index: 15;
 
-  display: none;
-}
+      border-radius: 12px;
+      background: transparent !important;
+      backdrop-filter: blur(6px);
+    }
 
-/* Modal overlay (click album art) */
-#artist-details-container {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.75);
-  display: none;
-  z-index: 999;
-  align-items: center;
-  justify-content: center;
-}
+    #next-up-img {
+      width: 75px;
+      height: 75px;
+      border-radius: 12px;
+      object-fit: cover;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+      flex-shrink: 0;
+      display: none;
+    }
 
-#artist-details {
-  max-width: 90%;
-  max-height: 90%;
-  overflow-y: auto;
-  font-size: 24px;
-  line-height: 1.7;
-  text-align: center;
+    #next-up-text {
+      flex: 1;
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 900px;
+    }
 
-  background: rgba(0,0,0,0.85);
-  border: 1px solid rgba(255,255,255,0.15);
-  border-radius: 20px;
-  padding: 40px 50px;
-}
+    /* Progress Bar */
+    #progress-bar-wrapper {
+      width: 900px;
+      height: 8px;
+      background: rgba(255,255,255,0.15);
+      border-radius: 4px;
+      overflow: hidden;
+      margin-top: auto;
+    }
 
-#artist-details p { margin: 56px 0; }
-.fade-in { opacity: 1; transition: opacity 2s ease; }
-.fade-out { opacity: 0; transition: opacity 3s ease; }
-</style>
+    #progress-fill {
+      height: 12px;                 /* KEEP 12px */
+      width: 100%;
+      background: #4fc3f7;
+      transform: scaleX(0);
+      transform-origin: left center;
+      will-change: transform;
+      border-radius: 3px;
+      transition: none;
+    }
+
+    /* Bottom-right mode logo (Radio icon or AirPlay icon) */
+    #mode-logo {
+      width: 100px;
+      height: 100px;
+
+      border-radius: 16px;
+      object-fit: cover;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      opacity: 0.9;
+
+      display: none;
+    }
+
+    /* Modal overlay (click album art) */
+    #artist-details-container {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.75);
+      display: none;
+      z-index: 999;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #artist-details {
+      max-width: 90%;
+      max-height: 90%;
+      overflow-y: auto;
+      font-size: 24px;
+      line-height: 1.7;
+      text-align: center;
+
+      background: rgba(0,0,0,0.85);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 20px;
+      padding: 40px 50px;
+    }
+
+    #artist-details p { margin: 56px 0; }
+  </style>
 </head>
 
 <body class="booting">
-  <div id="background-image"></div>
+  <div id="background-a"></div>
+  <div id="background-b"></div>
 
   <div id="content">
     <!-- Album Art Column -->
@@ -252,20 +311,19 @@ body {
         id="album-art"
         src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
         alt="Album Art"
-        class="fade-in"
       >
     </div>
 
     <!-- Text Column -->
     <div class="text-column">
-      <div id="artist-name" class="fade-in"></div>
-      <div id="track-title" class="fade-in"></div>
+      <div id="artist-name"></div>
+      <div id="track-title"></div>
 
       <div id="album-info">
         <a id="album-link" href="javascript:void(0)"><span id="album-text"></span></a>
       </div>
 
-      <div id="file-info" class="fade-in">
+      <div id="file-info">
         <span id="file-info-text"></span>
         <span id="hires-badge" class="hires-badge" style="display:none;">Lossless</span>
       </div>
@@ -274,7 +332,7 @@ body {
       <div id="personnel-info"></div>
 
       <!-- Next Up (overlay positioned via CSS) -->
-      <div id="next-up" class="fade-in">
+      <div id="next-up">
         <img id="next-up-img" alt="" />
         <span id="next-up-text"></span>
       </div>
