@@ -108,7 +108,7 @@ http://<PI2_IP>:8000/index1080.html
 You can skip Pi #3 entirely and view the display from any computer or tablet.
 
 ⸻
-
+```
 Project Files
 
 File             Location   Purpose
@@ -117,7 +117,7 @@ server.mjs       Pi #2      Aggregates moOde data + metadata
 index1080.html   Pi #2      1080p fullscreen UI
 script1080.js    Pi #2      UI logic, progress bar, caching
 airplay.png      Pi #2      Fallback artwork for AirPlay
-
+```
 ⸻
 
 Networking Requirements
