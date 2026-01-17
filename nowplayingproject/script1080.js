@@ -206,6 +206,14 @@ function setModeLogo({ isStream, isAirplay, stationLogoUrl }) {
 function updateNextUp({ isAirplay, isStream }) {
   const el = document.getElementById('next-up');
   if (!el) return;
+  
+  // If paused screensaver is active, hide + stop updates
+  if (pauseMode) {
+    el.textContent = '';
+    lastNextUpKey = '';
+    return;
+  }
+
 
   // AirPlay: don't show Next Up
   if (isAirplay) {
@@ -289,7 +297,7 @@ function setPausedScreensaver(on) {
   const fileInfoText = document.getElementById('file-info-text');
   const hiresBadge = document.getElementById('hires-badge');
   const personnelEl = document.getElementById('personnel-info');
-  
+  const nextUpEl = document.getElementById('next-up');   // <-- ADD
 
   const show = !on;
   if (artistEl) artistEl.style.display = show ? '' : 'none';
@@ -298,6 +306,7 @@ function setPausedScreensaver(on) {
   if (fileInfoText) fileInfoText.style.display = show ? '' : 'none';
   if (hiresBadge) hiresBadge.style.display = show ? '' : 'none';
   if (personnelEl) personnelEl.style.display = show ? '' : 'none';
+  if (nextUpEl) nextUpEl.style.display = show ? '' : 'none'; // <-- ADD
 
   // Swap art to pause art
   const artEl = document.getElementById('album-art');
