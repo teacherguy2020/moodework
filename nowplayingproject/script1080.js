@@ -16,6 +16,10 @@
 const NEXT_UP_URL = 'http://10.0.0.233:3000/next-up';
 const ENABLE_NEXT_UP = true;
 
+let lastNextUpKey = '';
+let lastNextUpFetchTs = 0;
+const NEXT_UP_REFRESH_MS = 5000; // refresh Next Up every 5s
+
 const NOW_PLAYING_URL = 'http://10.0.0.233:3000/now-playing';
 const AIRPLAY_ICON_URL = 'http://10.0.0.233:8000/airplay.png?v=1';
 
@@ -27,8 +31,6 @@ const PAUSE_ART_URL = 'http://10.0.0.254/images/default-album-cover.png';
 const PAUSE_MOVE_INTERVAL_MS = 8000;
 const PAUSE_ART_MIN_MARGIN_PX = 20;
 const PAUSE_SCREENSAVER_DELAY_MS = 5000;
-
-let lastNextUpKey = '';
 
 let pauseOrStopSinceTs = 0;
 let pauseMode = false;
@@ -297,12 +299,24 @@ function fetchNowPlaying() {
 
       // Local files + AirPlay
       if (!isStream) {
-        if (justResumedFromPause || baseKey !== currentTrackKey) {
+        const trackChanged = justResumedFromPause || baseKey !== currentTrackKey;
+
+        if (trackChanged) {
           currentTrackKey = baseKey;
           updateUI(data);
-
-          if (ENABLE_NEXT_UP) updateNextUp({ isAirplay, isStream });
         }
+
+        // ✅ Next Up: refresh on track change OR periodically (so it doesn't "disappear forever")
+        if (ENABLE_NEXT_UP && !pauseMode && !isAirplay) {
+          const now = Date.now();
+          const due = (now - (lastNextUpFetchTs || 0)) >= NEXT_UP_REFRESH_MS;
+
+          if (trackChanged || due) {
+            lastNextUpFetchTs = now;
+            updateNextUp({ isAirplay, isStream });
+          }
+        }
+
         justResumedFromPause = false;
         return;
       }
@@ -415,12 +429,16 @@ function updateNextUp({ isAirplay, isStream }) {
   const wrap = document.getElementById('next-up');
   const textEl = document.getElementById('next-up-text');
   const imgEl = document.getElementById('next-up-img');
-  if (!wrap || !textEl || !imgEl) return;
+
+  // ✅ allow text even if image element is missing
+  if (!wrap || !textEl) return;
 
   if (pauseMode || isAirplay || isStream) {
     textEl.textContent = '';
-    imgEl.style.display = 'none';
-    imgEl.removeAttribute('src');
+    if (imgEl) {
+      imgEl.style.display = 'none';
+      imgEl.removeAttribute('src');
+    }
     lastNextUpKey = '';
     return;
   }
@@ -430,8 +448,10 @@ function updateNextUp({ isAirplay, isStream }) {
     .then(x => {
       if (!x || x.ok !== true || !x.next) {
         textEl.textContent = '';
-        imgEl.style.display = 'none';
-        imgEl.removeAttribute('src');
+        if (imgEl) {
+          imgEl.style.display = 'none';
+          imgEl.removeAttribute('src');
+        }
         lastNextUpKey = '';
         return;
       }
@@ -444,8 +464,10 @@ function updateNextUp({ isAirplay, isStream }) {
 
       if (!title && !file) {
         textEl.textContent = '';
-        imgEl.style.display = 'none';
-        imgEl.removeAttribute('src');
+        if (imgEl) {
+          imgEl.style.display = 'none';
+          imgEl.removeAttribute('src');
+        }
         lastNextUpKey = '';
         return;
       }
@@ -458,23 +480,16 @@ function updateNextUp({ isAirplay, isStream }) {
       const showArtist = artist ? ` • ${artist}` : '';
       textEl.textContent = `Next up: ${showTitle}${showArtist}`;
 
-      if (!artUrl) {
-        imgEl.style.display = 'none';
-        imgEl.removeAttribute('src');
+      // ✅ image optional
+      if (!imgEl || !artUrl) {
+        if (imgEl) {
+          imgEl.style.display = 'none';
+          imgEl.removeAttribute('src');
+        }
         return;
       }
 
-      // Force reliable refresh:
-      // 1) show box immediately (prevents layout race)
-      // 2) clear src, then set new src
-      // 3) only keep visible once loaded (avoids stale art sticking)
       imgEl.style.display = 'block';
-      imgEl.onload = () => { imgEl.style.display = 'block'; };
-      imgEl.onerror = () => {
-        imgEl.style.display = 'none';
-        imgEl.removeAttribute('src');
-      };
-
       imgEl.removeAttribute('src');
       imgEl.src = artUrl;
     })

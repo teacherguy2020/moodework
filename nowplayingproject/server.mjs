@@ -653,8 +653,8 @@ app.get('/next-up', async (req, res) => {
     }
 
     // Extract nextsong fields from moOde status
-    const nextsongRaw = moodeVal(statusRaw, 18); // "nextsong: N"
-    const nextsongid = moodeVal(statusRaw, 19);  // "nextsongid: ID"
+    const nextsongRaw = moodeVal(statusRaw, 19); // "nextsong: N"
+    const nextsongid = moodeVal(statusRaw, 20);  // "nextsongid: ID"
 
     if (nextsongRaw === null || nextsongRaw === undefined || String(nextsongRaw).trim() === '') {
       return res.json({
