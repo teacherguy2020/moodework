@@ -259,12 +259,10 @@ Stability
 	•	Audio playback isolated from UI crashes
 
 Performance
-	•	No Chromium or heavy JS on the moOde Pi
+	•	No heavy JS on the moOde Pi
 
 Flexibility
 	•	Display can reboot independently
 	•	UI can be redesigned without touching playback
 
-Silence
-	•	No unnecessary services on the audio Pi
 
