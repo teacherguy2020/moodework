@@ -236,7 +236,10 @@ function fetchNowPlaying() {
 
       const isAirplay = data.isAirplay === true;
       const isStream  = data.isStream === true;
-
+      // Always clear Next Up when it should not be shown
+      if (ENABLE_NEXT_UP && (pauseMode || isAirplay || isStream)) {
+        clearNextUpUI();
+      }
       // Track key (used for change detection)
       let baseKey = '';
       if (isAirplay) {
@@ -547,6 +550,25 @@ function updateNextUp({ isAirplay, isStream }) {
       imgEl.style.display = 'block';
     })
     .catch(() => {});
+}
+
+function clearNextUpUI() {
+  const wrap = document.getElementById('next-up');
+  const textEl = document.getElementById('next-up-text');
+  const imgEl = document.getElementById('next-up-img');
+
+  if (textEl) textEl.textContent = '';
+  if (imgEl) {
+    imgEl.style.display = 'none';
+    imgEl.removeAttribute('src');
+    imgEl.dataset.lastUrl = '';
+  }
+  if (wrap) {
+    // optional: hide the whole row so it doesn’t occupy/overlay anything
+    wrap.style.display = 'none';
+  }
+
+  lastNextUpKey = '';
 }
 
 /* =========================
