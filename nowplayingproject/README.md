@@ -181,7 +181,9 @@ pm2 start server.mjs —name moode-now-playing
 pm2 save
 
 Test:
-```curl http://<PI2_IP>:3000/now-playing | jq
+```
+  curl http://<PI2_IP>:3000/now-playing | jq
+  
 ```
 
 ⸻
@@ -204,6 +206,7 @@ The Simplest (Recommended) Web Server
 From the directory containing the UI files:
 ```
 python3 -m http.server 8000
+
 ```
 That’s it.
 
@@ -216,6 +219,7 @@ This:
 Test:
 ```
 curl http://<PI2_IP>:8000/index1080.html
+
 ```
 ⸻
 
@@ -234,6 +238,7 @@ From the display Pi (Chromium kiosk):
   —noerrdialogs \
   —disable-session-crashed-bubble \
   http://<PI2_IP>:8000/index1080.html
+  
 ```
 Hide mouse cursor:
 
