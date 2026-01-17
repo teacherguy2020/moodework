@@ -631,170 +631,161 @@ function parseAplmeta(txt) {
  * ========================= */
 
 app.get('/next-up', async (req, res) => {
-    const debug = req.query.debug === '1';
+  const debug = req.query.debug === '1';
 
-    try {
-        // Current song + status from moOde
-        const song = await fetchJson(`${MOODE_BASE_URL}/command/?cmd=get_currentsong`);
-        const statusRaw = await fetchJson(`${MOODE_BASE_URL}/command/?cmd=status`);
+  try {
+    // Current song + status from moOde
+    const song = await fetchJson(`${MOODE_BASE_URL}/command/?cmd=get_currentsong`);
+    const statusRaw = await fetchJson(`${MOODE_BASE_URL}/command/?cmd=status`);
 
-        const file = song.file || '';
-        const isStream = isStreamPath(file);
-        const isAirplay =
-            isAirplayFile(file) ||
-            String(song.encoded || '').toLowerCase() === 'airplay';
+    const file = song.file || '';
+    const isStream = isStreamPath(file);
+    const isAirplay =
+      isAirplayFile(file) || String(song.encoded || '').toLowerCase() === 'airplay';
 
-        // Streams and AirPlay never have a next-up
-        if (isStream || isAirplay) {
-            return res.json({
-                ok: true,
-                next: null,
-                ...(debug ? { reason: 'stream-or-airplay' } : {}),
-            });
-        }
-
-        // Extract nextsong fields
-        const nextsongRaw = moodeVal(statusRaw, 18);   // "nextsong: N"
-        const nextsongid  = moodeVal(statusRaw, 19);   // "nextsongid: ID"
-
-        if (
-            nextsongRaw === null ||
-            nextsongRaw === undefined ||
-            String(nextsongRaw).trim() === ''
-        ) {
-            return res.json({
-                ok: true,
-                next: null,
-                ...(debug ? { reason: 'no-nextsong' } : {}),
-            });
-        }
-
-        const nextPos = Number.parseInt(String(nextsongRaw).trim(), 10);
-        if (!Number.isFinite(nextPos) || nextPos < 0) {
-            return res.json({
-                ok: true,
-                next: null,
-                ...(debug
-                    ? { nextsong: nextsongRaw, nextsongid, reason: 'bad-nextsong' }
-                    : {}),
-            });
-        }
-
-        let next = null;
-        let nextPos2 = null;
-        let nextsongid2 = '';
-
-        /* =========================
-         * Attempt 1: playlistinfo by position
-         * ========================= */
-
-        try {
-            const cmd = `playlistinfo ${nextPos}:${nextPos + 1}`;
-            const raw = await mpdQueryRaw(cmd);
-            const kv  = parseMpdFirstBlock(raw);
-
-            const file2   = kv.file || '';
-            const title2  = kv.title || '';
-            const artist2 = kv.artist || '';
-            const album2  = kv.album || '';
-            const id2     = kv.id || '';
-            const pos2    = kv.pos || String(nextPos);
-
-            if (file2 || title2 || artist2) {
-                next = {
-                    file: file2,
-                    title: title2,
-                    artist: artist2,
-                    album: album2,
-                    songid: id2,
-                    songpos: pos2,
-                };
-            }
-        } catch {
-            // ignore -- fall through to retry paths
-        }
-
-        /* =========================
-         * Attempt 2: playlistid fallback
-         * ========================= */
-
-        if (!next && nextsongid) {
-            next = await mpdPlaylistInfoById(nextsongid);
-        }
-
-        /* =========================
-         * Attempt 3: re-fetch status once (race protection)
-         * ========================= */
-
-        if (!next) {
-            const statusRaw2 = await fetchJson(`${MOODE_BASE_URL}/command/?cmd=status`);
-            const nextsongRaw2 = moodeVal(statusRaw2, 18);
-            nextsongid2 = moodeVal(statusRaw2, 19);
-
-            nextPos2 = Number.parseInt(String(nextsongRaw2).trim(), 10);
-
-            if (Number.isFinite(nextPos2) && nextPos2 >= 0) {
-                next = await mpdPlaylistInfoByPos(nextPos2);
-            }
-
-            if (!next && nextsongid2) {
-                next = await mpdPlaylistInfoById(nextsongid2);
-            }
-        }
-
-        /* =========================
-         * Final result
-         * ========================= */
-
-        if (!next) {
-            return res.json({
-                ok: true,
-                next: null,
-                ...(debug
-                    ? {
-                        nextsong: nextPos,
-                        nextsongid,
-                        nextsong2: nextPos2,
-                        nextsongid2,
-                        reason: 'mpd-playlistinfo-no-match',
-                        mpdHost: MPD_HOST,
-                        mpdPort: MPD_PORT,
-                        localAddress: LOCAL_ADDRESS,
-                    }
-                    : {}),
-            });
-        }
-
-        return res.json({
-            ok: true,
-            next: {
-                songid: next.songid || nextsongid2 || nextsongid || '',
-                songpos: next.songpos || String(nextPos2 ?? nextPos),
-                title: next.title || '',
-                artist: next.artist || '',
-                album: next.album || '',
-                file: next.file || '',
-            },
-            ...(debug
-                ? {
-                    nextsong: nextPos,
-                    nextsongid,
-                    nextsong2: nextPos2,
-                    nextsongid2,
-                    reason: 'ok',
-                }
-                : {}),
-        });
-
-    } catch (err) {
-        return res.status(200).json({
-            ok: false,
-            next: null,
-            ...(debug
-                ? { error: err?.message || String(err), reason: 'exception' }
-                : {}),
-        });
+    // Streams and AirPlay never have a next-up
+    if (isStream || isAirplay) {
+      return res.json({
+        ok: true,
+        next: null,
+        ...(debug ? { reason: 'stream-or-airplay' } : {}),
+      });
     }
+
+    // Extract nextsong fields from moOde status
+    const nextsongRaw = moodeVal(statusRaw, 18); // "nextsong: N"
+    const nextsongid = moodeVal(statusRaw, 19);  // "nextsongid: ID"
+
+    if (nextsongRaw === null || nextsongRaw === undefined || String(nextsongRaw).trim() === '') {
+      return res.json({
+        ok: true,
+        next: null,
+        ...(debug ? { reason: 'no-nextsong' } : {}),
+      });
+    }
+
+    const nextPos = Number.parseInt(String(nextsongRaw).trim(), 10);
+    if (!Number.isFinite(nextPos) || nextPos < 0) {
+      return res.json({
+        ok: true,
+        next: null,
+        ...(debug ? { nextsong: nextsongRaw, nextsongid, reason: 'bad-nextsong' } : {}),
+      });
+    }
+
+    let next = null;
+    let nextPos2 = null;
+    let nextsongid2 = '';
+
+    // =========================
+    // Attempt 1: MPD playlistinfo by position (fast)
+    // =========================
+    try {
+      const cmd = `playlistinfo ${nextPos}:${nextPos + 1}`;
+      const raw = await mpdQueryRaw(cmd);
+      const kv = parseMpdFirstBlock(raw);
+
+      const file2 = kv.file || '';
+      const title2 = kv.title || '';
+      const artist2 = kv.artist || '';
+      const album2 = kv.album || '';
+      const id2 = kv.id || '';
+      const pos2 = kv.pos || String(nextPos);
+
+      if (file2 || title2 || artist2) {
+        next = {
+          file: file2,
+          title: title2,
+          artist: artist2,
+          album: album2,
+          songid: id2,
+          songpos: pos2,
+        };
+      }
+    } catch {
+      // ignore and fall through
+    }
+
+    // =========================
+    // Attempt 2: MPD playlistid fallback (authoritative)
+    // =========================
+    if (!next && nextsongid) {
+      next = await mpdPlaylistInfoById(nextsongid);
+    }
+
+    // =========================
+    // Attempt 3: re-fetch status once (race protection), then retry
+    // =========================
+    if (!next) {
+      const statusRaw2 = await fetchJson(`${MOODE_BASE_URL}/command/?cmd=status`);
+      const nextsongRaw2 = moodeVal(statusRaw2, 18);
+      nextsongid2 = moodeVal(statusRaw2, 19);
+
+      nextPos2 = Number.parseInt(String(nextsongRaw2).trim(), 10);
+
+      if (Number.isFinite(nextPos2) && nextPos2 >= 0) {
+        next = await mpdPlaylistInfoByPos(nextPos2);
+      }
+      if (!next && nextsongid2) {
+        next = await mpdPlaylistInfoById(nextsongid2);
+      }
+    }
+
+    // =========================
+    // Final result
+    // =========================
+    if (!next) {
+      return res.json({
+        ok: true,
+        next: null,
+        ...(debug
+          ? {
+              nextsong: nextPos,
+              nextsongid,
+              nextsong2: nextPos2,
+              nextsongid2,
+              reason: 'mpd-playlistinfo-no-match',
+              mpdHost: MPD_HOST,
+              mpdPort: MPD_PORT,
+              localAddress: LOCAL_ADDRESS,
+            }
+          : {}),
+      });
+    }
+
+    // moOde cover art endpoint is file-based (not ID-based)
+    const nextArtUrl = next.file
+      ? `${MOODE_BASE_URL}/coverart.php/${encodeURIComponent(next.file)}`
+      : '';
+
+    return res.json({
+      ok: true,
+      next: {
+        songid: next.songid || nextsongid2 || nextsongid || '',
+        songpos: next.songpos || String(nextPos2 ?? nextPos),
+        title: next.title || '',
+        artist: next.artist || '',
+        album: next.album || '',
+        file: next.file || '',
+        artUrl: nextArtUrl,
+      },
+      ...(debug
+        ? {
+            nextsong: nextPos,
+            nextsongid,
+            nextsong2: nextPos2,
+            nextsongid2,
+            reason: 'ok',
+          }
+        : {}),
+    });
+  } catch (err) {
+    return res.status(200).json({
+      ok: false,
+      next: null,
+      ...(debug ? { error: err?.message || String(err), reason: 'exception' } : {}),
+    });
+  }
 });
 
 app.get('/now-playing', async (req, res) => {

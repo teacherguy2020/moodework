@@ -34,6 +34,14 @@ let pauseOrStopSinceTs = 0;
 let pauseMode = false;
 let lastPauseMoveTs = 0;
 let justResumedFromPause = false;
+let progressAnimRaf = 0;
+let progressAnim = {
+  t0: 0,
+  baseElapsed: 0,
+  duration: 0,
+  running: false,
+};
+
 /* =========================
  * Feature toggles
  * ========================= */
@@ -101,6 +109,7 @@ function fetchNowPlaying() {
                   setProgressVisibility(true); // hide progress bar
                   hideModeLogo();              // hide radio/airplay icon
                   movePauseArtRandomly(false); // drift default art
+                  stopProgressAnimator();
                   return;
             }
       } else {
@@ -118,10 +127,15 @@ function fetchNowPlaying() {
 
       // Update progress for FILE playback only
       if (!isStream && !isAirplay) {
-        if (typeof data.percent === 'number') {
+        const el = Number(data.elapsed);
+        const dur = Number(data.duration);
+
+        if (Number.isFinite(el) && Number.isFinite(dur) && dur > 0) {
+          // Smooth: animate between polls using elapsed/duration
+          startProgressAnimator(el, dur);
+        } else if (typeof data.percent === 'number') {
+          // Fallback (still smooth-ish if percent is fractional)
           updateProgressBarPercent(data.percent);
-        } else if (typeof data.elapsed === 'number' && typeof data.duration === 'number' && data.duration > 0) {
-          updateProgressBarPercent(Math.round((data.elapsed / data.duration) * 100));
         }
       }
       
@@ -203,75 +217,109 @@ function setModeLogo({ isStream, isAirplay, stationLogoUrl }) {
  * Helpers
  * ========================= */
  
+ function stopProgressAnimator() {
+  progressAnim.running = false;
+  if (progressAnimRaf) cancelAnimationFrame(progressAnimRaf);
+  progressAnimRaf = 0;
+}
+
+function startProgressAnimator(baseElapsed, duration) {
+  // guard
+  if (!Number.isFinite(baseElapsed) || !Number.isFinite(duration) || duration <= 0) {
+    stopProgressAnimator();
+    return;
+  }
+
+  progressAnim.t0 = performance.now();
+  progressAnim.baseElapsed = baseElapsed;
+  progressAnim.duration = duration;
+  progressAnim.running = true;
+
+  const tick = () => {
+    if (!progressAnim.running) return;
+
+    const now = performance.now();
+    const elapsedNow = progressAnim.baseElapsed + (now - progressAnim.t0) / 1000;
+
+    const pct = (elapsedNow / progressAnim.duration) * 100;
+    updateProgressBarPercent(pct);
+
+    // stop at end
+    if (elapsedNow >= progressAnim.duration) {
+      updateProgressBarPercent(100);
+      stopProgressAnimator();
+      return;
+    }
+
+    progressAnimRaf = requestAnimationFrame(tick);
+  };
+
+  // kick immediately
+  progressAnimRaf = requestAnimationFrame(tick);
+}
+ 
 function updateNextUp({ isAirplay, isStream }) {
-  const el = document.getElementById('next-up');
-  if (!el) return;
-  
-  // If paused screensaver is active, hide + stop updates
-  if (pauseMode) {
-    el.textContent = '';
+  const wrap = document.getElementById('next-up');
+  const textEl = document.getElementById('next-up-text');
+  const imgEl = document.getElementById('next-up-img');
+  if (!wrap || !textEl || !imgEl) return;
+
+  // Conditions where Next Up should never appear
+  if (pauseMode || isAirplay || isStream) {
+    textEl.textContent = '';
+    imgEl.style.display = 'none';
+    imgEl.removeAttribute('src');
     lastNextUpKey = '';
     return;
   }
-
-
-  // AirPlay: don't show Next Up
-  if (isAirplay) {
-    el.textContent = '';
-    lastNextUpKey = '';
-    return;
-  }
-
-  // Optional: you can decide whether to show for radio streams.
-  // If you don't want it for radio either, uncomment the block below:
-  /*
-  if (isStream) {
-    el.textContent = '';
-    lastNextUpKey = '';
-    return;
-  }
-  */
 
   fetch(NEXT_UP_URL, { cache: 'no-store' })
     .then(r => (r.ok ? r.json() : null))
     .then(x => {
-      if (!x || x.ok !== true) {
-        el.textContent = '';
+      if (!x || x.ok !== true || !x.next) {
+        textEl.textContent = '';
+        imgEl.style.display = 'none';
+        imgEl.removeAttribute('src');
         lastNextUpKey = '';
         return;
       }
 
       const next = x.next;
-      if (!next) {
-        el.textContent = '';
-        lastNextUpKey = '';
-        return;
-      }
-
-      // Accept either title or file as "something we can show"
-      const title = String(next.title || '').trim();
-      const file  = String(next.file || '').trim();
+      const title  = String(next.title || '').trim();
+      const file   = String(next.file || '').trim();
+      const artist = String(next.artist || '').trim();
 
       if (!title && !file) {
-        el.textContent = '';
+        textEl.textContent = '';
+        imgEl.style.display = 'none';
+        imgEl.removeAttribute('src');
         lastNextUpKey = '';
         return;
       }
 
-      const artist = String(next.artist || '').trim();
-      const key = `${next.songid || ''}|${artist}|${title}|${file}`;
+      const key = `${next.songid || ''}|${artist}|${title}|${file}|${next.artUrl || ''}`;
       if (key === lastNextUpKey) return;
       lastNextUpKey = key;
 
-      const showTitle = title || file.split('/').pop() || file;
+      const showTitle  = title || file.split('/').pop() || file;
       const showArtist = artist ? ` • ${artist}` : '';
-      el.textContent = `Next: ${showTitle}${showArtist}`;
+
+      textEl.textContent = `Next up: ${showTitle}${showArtist}`;
+
+      const artUrl = String(next.artUrl || '').trim();
+      if (artUrl) {
+        imgEl.src = artUrl;
+        imgEl.style.display = 'block';
+      } else {
+        imgEl.style.display = 'none';
+        imgEl.removeAttribute('src');
+      }
     })
     .catch(() => {
-      // quiet
+      // quiet failure
     });
 }
- 
+
  function hideModeLogo() {
   const logoEl = document.getElementById('mode-logo');
   if (!logoEl) return;
@@ -841,10 +889,12 @@ function updateProgressBarPercent(percent) {
   if (!progressFill) return;
 
   const clamped = Math.max(0, Math.min(100, Number(percent) || 0));
-  if (clamped === lastPercent) return;
+
+  // IMPORTANT: do NOT short-circuit on equality
   lastPercent = clamped;
 
-  progressFill.style.width = `${clamped}%`;
+  // Use transform instead of width for smoother GPU rendering
+  progressFill.style.transform = `scaleX(${clamped / 100})`;
 }
 
 function attachClickEventToAlbumArt() {

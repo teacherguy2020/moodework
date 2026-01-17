@@ -120,45 +120,64 @@ body {
 
 /* ===== Next Up overlay ===== */
 :root{
-  --nextup-left-pad: 0px;       /* aligns to right edge of text column */
-  --nextup-bottom-gap: 18px;     /* vertical gap above progress bar */
-  --nextup-max-width: 70%;       /* keep it from spanning too wide */
+  --nextup-left-pad: 0px;        /* align with left edge of text column */
+  --nextup-bottom-gap: 32px;     /* vertical gap above progress bar */
+  --nextup-max-width: 100%;      /* match text column width */
 }
 
-/* Make room at bottom so overlay doesn't collide with other bottom elements */
+/* Make room at bottom so overlay doesn't collide with bottom elements */
 .text-column{
-  padding-bottom: 16px; /* slightly more breathing room */
+  padding-bottom: 24px;          /* extra breathing room */
 }
 
-/* Overlay itself */
+/* Overlay container */
 #next-up{
   position: absolute;
-  left: var(--nextup-right-pad);
+  left: var(--nextup-left-pad);
 
-  /* sit above the progress bar */
-  bottom: calc(8px + var(--nextup-bottom-gap)); /* 8px = progress bar height */
+  /* sit above the progress bar (8px bar height) */
+  bottom: calc(8px + var(--nextup-bottom-gap));
 
+  width: 100%;
   max-width: var(--nextup-max-width);
-  text-align: left;
+
+  display: flex;
+  align-items: center;
+  gap: 14px;
 
   font-size: 26px;
   font-weight: 600;
   color: rgba(255,255,255,0.92);
   text-shadow: 0 2px 10px rgba(0,0,0,0.85);
 
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: none;
-
   z-index: 15;
 
-  /* optional readability bubble */
-  padding: 8px 12px;
+  /* optional readability bubble (transparent background + blur only) */
+
   border-radius: 12px;
-  background: rgba(0,0,0,0.30);
-  backdrop-filter: blur(6px);
+  background: transparent !important;
+
 }
 
+/* Thumbnail */
+#next-up img,
+#next-up-img{
+  width: 75px;
+  height: 75px;
+  border-radius: 12px;
+  object-fit: cover;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+  flex-shrink: 0;
+}
+
+/* Text: ellipsize within remaining space */
+#next-up-text{
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 /* Progress Bar */
 #progress-bar-wrapper {
@@ -171,11 +190,14 @@ body {
 }
 
 #progress-fill {
-  height: 8px;
-  width: 0%;
-  background: #4fc3f7;
+  height: 12px;
+  width: 100%;
+  background: #4fc3f7;         /* <-- you need this */
+  transform: scaleX(0);
+  transform-origin: left center;
+  will-change: transform;
   border-radius: 3px;
-  transition: width 0.4s ease;
+  transition: none;
 }
 
 /* Bottom-right mode logo (Radio icon or AirPlay icon) */
@@ -221,6 +243,33 @@ body {
   padding: 40px 50px;
 }
 
+#next-up {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 28px;          /* adjust to taste */
+  color: #ddd;
+  text-shadow: 0 2px 10px rgba(0,0,0,0.8);
+}
+
+#next-up-img {
+  width: 75px;
+  height: 75px;
+  border-radius: 12px;
+  object-fit: cover;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+  display: none;            /* hidden until we have art */
+}
+
+#next-up-text {
+  display: block;
+  min-width: 0;             /* allows ellipsis in flex */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 900px;         /* controls where ellipses start */
+}
+
 #artist-details p { margin: 56px 0; }
 .fade-in { opacity: 1; transition: opacity 2s ease; }
 .fade-out { opacity: 0; transition: opacity 3s ease; }
@@ -260,7 +309,10 @@ body {
       <div id="personnel-info"></div>
 
       <!-- Next Up -->
-      <div id="next-up" class="fade-in"></div>
+      <div id="next-up" class="fade-in">
+        <img id="next-up-img" alt="" />
+        <span id="next-up-text"></span>
+      </div>
 
       <!-- Progress Bar (tracks only) -->
       <div id="progress-bar-wrapper">
