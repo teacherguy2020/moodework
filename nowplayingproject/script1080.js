@@ -90,11 +90,7 @@ function fetchNowPlaying() {
       // - For AirPlay: allow even if MPD says stop
       const state = String(data.state || '').toLowerCase();
       const pauseOrStop = isPauseOrStopState(data);
-      console.log(
-            'state=', state,
-            'pauseOrStop=', pauseOrStop,
-            'eligible=', screensaverEligible
-      );
+
 
       if (pauseOrStop && screensaverEligible) {
             if (!pauseOrStopSinceTs) pauseOrStopSinceTs = Date.now();
@@ -124,6 +120,7 @@ function fetchNowPlaying() {
       
       // Hide progress for radio and AirPlay
       setProgressVisibility(isStream || isAirplay);
+      if (isStream || isAirplay) stopProgressAnimator();
 
       // Update progress for FILE playback only
       if (!isStream && !isAirplay) {
@@ -720,6 +717,7 @@ function updateUI(data) {
   const isAirplay = data.isAirplay === true;
 
   setProgressVisibility(isStream || isAirplay);
+  if (isStream || isAirplay) stopProgressAnimator();
 
   const artistEl = document.getElementById('artist-name');
   const trackEl  = document.getElementById('track-title');
@@ -942,7 +940,7 @@ function clearUI() {
     hiresBadge.style.display = 'none';
   }
   if (personnelEl) personnelEl.textContent = '';
-  if (progressFill) progressFill.style.width = '0%';
+  if (progressFill) progressFill.style.transform = 'scaleX(0)';
 
   if (bgEl) bgEl.style.backgroundImage = 'none';
   if (artBgEl) artBgEl.style.backgroundImage = 'none';
