@@ -256,8 +256,8 @@ function updateNextUp({ isAirplay, isStream }) {
       lastNextUpKey = key;
 
       const showTitle = title || file.split('/').pop() || file;
-      const showArtist = artist ? ` -- ${artist}` : '';
-      el.textContent = `Next up: ${showTitle}${showArtist}`;
+      const showArtist = artist ? ` • ${artist}` : '';
+      el.textContent = `Next: ${showTitle}${showArtist}`;
     })
     .catch(() => {
       // quiet
