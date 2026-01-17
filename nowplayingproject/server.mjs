@@ -196,38 +196,61 @@ function makeAlbumKey({ artist, album, date }) {
 }
 
 function normalizeMoodeStatus(raw) {
-  function val(n) {
-    const s = raw?.[String(n)];
-    if (!s || typeof s !== 'string') return '';
+  const state = moodeValByKey(raw, 'state');
+  const timeStr = moodeValByKey(raw, 'time');
+  const elapsedStr = moodeValByKey(raw, 'elapsed');
+  const durationStr = moodeValByKey(raw, 'duration');
+
+  let elapsed = 0;
+  let duration = 0;
+
+  // ✅ Preferred: parse "time: <elapsed>:<duration>" (integer seconds)
+  if (timeStr && String(timeStr).includes(':')) {
+    const parts = String(timeStr).trim().split(':').map(s => s.trim());
+    if (parts.length >= 2) {
+      const e = Number.parseFloat(parts[0]);
+      const d = Number.parseFloat(parts[1]);
+      if (Number.isFinite(e)) elapsed = e;
+      if (Number.isFinite(d)) duration = d;
+    }
+  }
+
+  // Fallback only if time didn't yield usable values
+  if (!(duration > 0)) {
+    const e2 = Number.parseFloat(elapsedStr);
+    const d2 = Number.parseFloat(durationStr);
+    if (Number.isFinite(e2)) elapsed = e2;
+    if (Number.isFinite(d2)) duration = d2;
+  }
+
+  const percent = duration > 0 ? Math.round((elapsed / duration) * 100) : 0;
+  return { state, elapsed, duration, percent, time: timeStr };
+}
+
+function moodeValByKey(raw, keyOrIndex) {
+  if (!raw) return '';
+
+  // numeric legacy support
+  if (typeof keyOrIndex === 'number') {
+    const s = raw?.[String(keyOrIndex)];
+    if (typeof s !== 'string') return '';
     const i = s.indexOf(':');
     return i >= 0 ? s.slice(i + 1).trim() : s.trim();
   }
 
-  const state = val(9);
-  const timeStr = val(13);
-  const elapsedStr = val(14);
-  const durationStr = val(16);
-
-  let elapsed = parseFloat(elapsedStr) || 0;
-  let duration = parseFloat(durationStr) || 0;
-
-  if ((!elapsed || !duration) && timeStr.includes(':')) {
-    const [e, d] = timeStr.split(':');
-    if (!elapsed) elapsed = parseFloat(e) || 0;
-    if (!duration) duration = parseFloat(d) || 0;
+  // key lookup: scan values for "key:"
+  const want = String(keyOrIndex).toLowerCase().trim() + ':';
+  for (const v of Object.values(raw)) {
+    if (typeof v !== 'string') continue;
+    const line = v.trim();
+    if (line.toLowerCase().startsWith(want)) {
+      const i = line.indexOf(':');
+      return i >= 0 ? line.slice(i + 1).trim() : line.trim();
+    }
   }
-
-  const percent = duration > 0 ? Math.round((elapsed / duration) * 100) : 0;
-  return { state, elapsed, duration, percent };
+  return '';
 }
 
-// Keep: moOde’s status JSON indexes for nextsong/nextsongid (matches your live output)
-function moodeVal(raw, n) {
-  const s = raw?.[String(n)];
-  if (!s || typeof s !== 'string') return '';
-  const i = s.indexOf(':');
-  return i >= 0 ? s.slice(i + 1).trim() : s.trim();
-}
 
 function mpdFileToLocalPath(mpdFile) {
   if (!mpdFile || isStreamPath(mpdFile) || isAirplayFile(mpdFile)) return '';
@@ -652,11 +675,11 @@ app.get('/next-up', async (req, res) => {
       });
     }
 
-    // Extract nextsong fields from moOde status
-    const nextsongRaw = moodeVal(statusRaw, 19); // "nextsong: N"
-    const nextsongid = moodeVal(statusRaw, 20);  // "nextsongid: ID"
+    // Extract nextsong fields from moOde status (key-based, not index-based)
+    const nextsongRaw = moodeValByKey(statusRaw, 'nextsong');
+    const nextsongid  = moodeValByKey(statusRaw, 'nextsongid');
 
-    if (nextsongRaw === null || nextsongRaw === undefined || String(nextsongRaw).trim() === '') {
+    if (!String(nextsongRaw || '').trim()) {
       return res.json({
         ok: true,
         next: null,
@@ -718,10 +741,10 @@ app.get('/next-up', async (req, res) => {
     // =========================
     if (!next) {
       const statusRaw2 = await fetchJson(`${MOODE_BASE_URL}/command/?cmd=status`);
-      const nextsongRaw2 = moodeVal(statusRaw2, 18);
-      nextsongid2 = moodeVal(statusRaw2, 19);
+      const nextsongRaw2 = moodeValByKey(statusRaw2, 'nextsong');
+      nextsongid2 = moodeValByKey(statusRaw2, 'nextsongid');
 
-      nextPos2 = Number.parseInt(String(nextsongRaw2).trim(), 10);
+      nextPos2 = Number.parseInt(String(nextsongRaw2 || '').trim(), 10);
 
       if (Number.isFinite(nextPos2) && nextPos2 >= 0) {
         next = await mpdPlaylistInfoByPos(nextPos2);
@@ -971,8 +994,8 @@ app.get('/now-playing', async (req, res) => {
  app.get('/_debug/mpd', async (req, res) => {
   try {
     const statusRaw = await fetchJson(`${MOODE_BASE_URL}/command/?cmd=status`);
-    const nextsongRaw = moodeVal(statusRaw, 18);
-    const nextsongid  = moodeVal(statusRaw, 19);
+    const nextsongRaw = moodeValByKey(statusRaw, 'nextsong');
+    const nextsongid  = moodeValByKey(statusRaw, 'nextsongid');
 
     const pos = Number.parseInt(String(nextsongRaw).trim(), 10);
 

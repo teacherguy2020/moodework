@@ -235,7 +235,19 @@ function fetchNowPlaying() {
       if (!data) return;
 
       const isAirplay = data.isAirplay === true;
-      const isStream = data.isStream === true;
+      const isStream  = data.isStream === true;
+
+      // Track key (used for change detection)
+      let baseKey = '';
+      if (isAirplay) {
+        baseKey = `airplay|${data.artist || ''}|${data.title || ''}|${data.album || ''}|${data.altArtUrl || ''}`;
+      } else if (isStream) {
+        baseKey = `${data.file}|${data.album || ''}`;
+      } else {
+        baseKey = data.file || `${data.artist}|${data.album}|${data.title}`;
+      }
+
+      const trackChanged = justResumedFromPause || baseKey !== currentTrackKey;
 
       // Update bottom-right logo EVERY poll
       setModeLogo({
@@ -243,6 +255,10 @@ function fetchNowPlaying() {
         isAirplay,
         stationLogoUrl: data.albumArtUrl || '',
       });
+
+      /* =========================
+       * Pause / screensaver logic
+       * ========================= */
 
       const pauseOrStop = isPauseOrStopState(data);
       const screensaverEligible = !isAirplay;
@@ -260,7 +276,7 @@ function fetchNowPlaying() {
           hideModeLogo();
           movePauseArtRandomly(false);
           stopProgressAnimator();
-          return;
+          return; // stay in screensaver
         }
       } else {
         pauseOrStopSinceTs = 0;
@@ -268,45 +284,58 @@ function fetchNowPlaying() {
         if (pauseMode) {
           setPausedScreensaver(false);
           justResumedFromPause = true;
+          stopProgressAnimator(); // hard reset on resume
         }
       }
 
-      // Hide progress for radio + AirPlay
+      /* =========================
+       * Progress bar control
+       * ========================= */
+
+      // Radio + AirPlay: never animate
       setProgressVisibility(isStream || isAirplay);
       if (isStream || isAirplay) stopProgressAnimator();
 
-      // Progress for files only
+      // Local files only
       if (!isStream && !isAirplay) {
-        const el = Number(data.elapsed);
-        const dur = Number(data.duration);
+        let el  = Number(data.elapsed);
+        let dur = Number(data.duration);
+
+        // ✅ normalize units (sometimes duration/elapsed can come through in ms)
+        // Heuristic: if value is huge, treat it as milliseconds.
+        if (Number.isFinite(dur) && dur > 0 && dur > 24 * 60 * 60) dur = dur / 1000;
+        if (Number.isFinite(el)  && el  > 0 && el  > 24 * 60 * 60) el  = el  / 1000;
 
         if (Number.isFinite(el) && Number.isFinite(dur) && dur > 0) {
-          startProgressAnimator(el, dur);
-        } else if (typeof data.percent === 'number') {
-          updateProgressBarPercent(data.percent);
+          if (trackChanged || !progressAnim.running) {
+            startProgressAnimator(el, dur);
+          } else {
+            const now = performance.now();
+            const expected =
+              progressAnim.baseElapsed + (now - progressAnim.t0) / 1000;
+
+            if (el > expected - 0.25) {
+              progressAnim.baseElapsed = el;
+              progressAnim.t0 = now;
+            }
+          }
+        } else {
+          stopProgressAnimator();
+          updateProgressBarPercent(0);
         }
       }
 
-      // Track key
-      let baseKey = '';
-      if (isAirplay) {
-        baseKey = `airplay|${data.artist || ''}|${data.title || ''}|${data.album || ''}|${data.altArtUrl || ''}`;
-      } else if (isStream) {
-        baseKey = `${data.file}|${data.album || ''}`;
-      } else {
-        baseKey = data.file || `${data.artist}|${data.album}|${data.title}`;
-      }
+      /* =========================
+       * Track-change driven UI
+       * ========================= */
 
-      // Local files + AirPlay
       if (!isStream) {
-        const trackChanged = justResumedFromPause || baseKey !== currentTrackKey;
-
         if (trackChanged) {
           currentTrackKey = baseKey;
           updateUI(data);
         }
 
-        // ✅ Next Up: refresh on track change OR periodically (so it doesn't "disappear forever")
+        // Next Up: refresh on change OR periodic
         if (ENABLE_NEXT_UP && !pauseMode && !isAirplay) {
           const now = Date.now();
           const due = (now - (lastNextUpFetchTs || 0)) >= NEXT_UP_REFRESH_MS;
@@ -317,6 +346,7 @@ function fetchNowPlaying() {
           }
         }
 
+        // ✅ clear here, but ALSO clear for radio below
         justResumedFromPause = false;
         return;
       }
@@ -329,6 +359,8 @@ function fetchNowPlaying() {
         currentTrackKey = radioKey;
         updateUI({ ...data, _radioDisplay: stabilized });
       }
+
+      // ✅ important: clear for radio path too
       justResumedFromPause = false;
     })
     .catch(() => {});
@@ -443,9 +475,11 @@ function updateNextUp({ isAirplay, isStream }) {
     return;
   }
 
+  console.log('NextUp fetch ->', NEXT_UP_URL);
   fetch(NEXT_UP_URL, { cache: 'no-store' })
     .then(r => (r.ok ? r.json() : null))
     .then(x => {
+      console.log('NextUp response <-', x);
       if (!x || x.ok !== true || !x.next) {
         textEl.textContent = '';
         if (imgEl) {
@@ -473,25 +507,44 @@ function updateNextUp({ isAirplay, isStream }) {
       }
 
       const key = `${next.songid || ''}|${artist}|${title}|${file}|${artUrl}`;
-      if (key === lastNextUpKey) return;
-      lastNextUpKey = key;
+      const same = (key === lastNextUpKey);
+      lastNextUpKey = key;   // do not early-return; ensure UI becomes visible
 
       const showTitle  = title || file.split('/').pop() || file;
       const showArtist = artist ? ` • ${artist}` : '';
       textEl.textContent = `Next up: ${showTitle}${showArtist}`;
 
-      // ✅ image optional
+      wrap.style.display = 'flex';
+      wrap.style.visibility = 'visible';
+      wrap.style.opacity = '1';
+
+      console.log(
+        'NextUp painted text:',
+        textEl.textContent,
+        'wrap.display=',
+        getComputedStyle(wrap).display,
+        'sameKey=',
+        same
+      );
+
+      // image optional
       if (!imgEl || !artUrl) {
         if (imgEl) {
           imgEl.style.display = 'none';
           imgEl.removeAttribute('src');
+          imgEl.dataset.lastUrl = '';
         }
         return;
       }
 
+      // ✅ prevent flashing: only update <img> if the URL changed
+      const lastUrl = imgEl.dataset.lastUrl || '';
+      if (artUrl !== lastUrl) {
+        imgEl.dataset.lastUrl = artUrl;
+        imgEl.src = artUrl;
+      }
+
       imgEl.style.display = 'block';
-      imgEl.removeAttribute('src');
-      imgEl.src = artUrl;
     })
     .catch(() => {});
 }
