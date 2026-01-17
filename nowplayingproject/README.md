@@ -181,8 +181,7 @@ pm2 start server.mjs —name moode-now-playing
 pm2 save
 
 Test:
-```
-curl http://<PI2_IP>:3000/now-playing | jq
+```curl http://<PI2_IP>:3000/now-playing | jq
 ```
 
 ⸻
@@ -215,9 +214,7 @@ This:
 	•	Is perfectly adequate
 
 Test:
-```
-curl http://<PI2_IP>:8000/index1080.html
-
+```curl http://<PI2_IP>:8000/index1080.html
 ```
 ⸻
 
@@ -229,14 +226,12 @@ http://<PI2_IP>:8000/index1080.html
 
 From the display Pi (Chromium kiosk):
 
-```
-chromium \
+```chromium \
   —kiosk \
   —disable-infobars \
   —noerrdialogs \
   —disable-session-crashed-bubble \
   http://<PI2_IP>:8000/index1080.html
-
 ```
 Hide mouse cursor:
 
