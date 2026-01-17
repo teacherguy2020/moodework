@@ -122,18 +122,17 @@
       z-index: 1;
     }
 
-    .text-column {
-      display: flex;
-      flex-direction: column;
-      justify-content: flex-start;
-      align-items: flex-start;
-      gap: 20px;
-      height: 700px;            /* align with album art */
-      width: 100%;
-      max-width: 1100px;
-
-      position: relative;       /* anchor for absolute-positioned elements */
-      padding-bottom: 24px;     /* breathing room above bottom edge (also for Next Up overlay) */
+    .text-column{
+      display:flex;
+      flex-direction:column;
+      justify-content:flex-start;
+      align-items:flex-start;
+      gap:20px;
+      height:700px;
+      width:100%;
+      max-width:1100px;
+      position:relative;
+      padding-bottom:0; /* ✅ was 24px */
     }
 
     #artist-name {
