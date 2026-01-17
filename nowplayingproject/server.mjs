@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * server.mjs — moOde Now-Playing API (Pi4)
+ * server.mjs -- moOde Now-Playing API (Pi4)
  *
  * GET /now-playing
  *  - FILE: deep tags via metaflac (local mount)
@@ -8,6 +8,13 @@
  *          - Supports both "Artist - Title" (pop) and WFMT packed classical:
  *            "Composer - Work - Performers - Album - Label"
  *  - AIRPLAY: uses moOde's aplmeta.txt + airplay-covers (authoritative, matches moOde UI)
+ *
+ * GET /next-up
+ *  - FILE only (not radio/airplay)
+ *  - Uses moOde /command/?cmd=status field "nextsong" when available
+ *  - Fetches that queue position via MPD TCP: "playlistinfo <pos>"
+ *  - Returns { ok:true, next:{...} } or { ok:true, next:null }
+ *  - If called with ?debug=1, returns diagnostic fields on failure
  */
 
 import express from 'express';
@@ -18,6 +25,7 @@ import { promisify } from 'node:util';
 import fs from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
+import net from 'node:net';
 
 const execFileP = promisify(execFile);
 
@@ -31,36 +39,86 @@ app.use(express.json());
 
 const PORT = 3000;
 
-// moOde base URL
-const MOODE_BASE_URL = 'http://YOURMOODEIP';
+// moOde base URL (where we fetch /command and /aplmeta.txt)
+const MOODE_BASE_URL = 'http://10.0.0.254';
 
-// Bind ONLY LAN calls (moOde) to eth0 IP to avoid dual-NIC oddities
-const LOCAL_ADDRESS = 'YOURMOODEIP';
-const lanHttpAgent = new http.Agent({ keepAlive: true, localAddress: LOCAL_ADDRESS });
+// This server's LAN IP (bind outbound LAN requests to avoid dual-NIC oddities)
+const LOCAL_ADDRESS = '10.0.0.233';
+const lanHttpAgent  = new http.Agent({ keepAlive: true, localAddress: LOCAL_ADDRESS });
 const lanHttpsAgent = new https.Agent({ keepAlive: true, localAddress: LOCAL_ADDRESS });
 
-// Default agents (no local bind) — best for public internet (iTunes)
-const defaultHttpAgent = new http.Agent({ keepAlive: true });
+// Default agents (no local bind) -- best for public internet (iTunes)
+const defaultHttpAgent  = new http.Agent({ keepAlive: true });
 const defaultHttpsAgent = new https.Agent({ keepAlive: true });
 
 // MPD file prefix and Pi4 mount point
 const MOODE_USB_PREFIX = 'USB/SamsungMoode/';
-const PI4_MOUNT_BASE = '/mnt/SamsungMoode';
+const PI4_MOUNT_BASE   = '/mnt/SamsungMoode';
 
 // Tools
 const METAFLAC = '/usr/bin/metaflac';
 
-// iTunes Search (public, no auth)
-const ITUNES_SEARCH_URL = 'https://itunes.apple.com/search';
-const ITUNES_COUNTRY = 'us';
-const ITUNES_TIMEOUT_MS = 2500;
+// Ensure MPD queries always go to moOde's MPD
+const MPD_HOST = '10.0.0.254';
+const MPD_PORT = 6600;
 
-const ITUNES_TTL_HIT_MS = 1000 * 60 * 60 * 12; // 12 hours
-const ITUNES_TTL_MISS_MS = 1000 * 60 * 10;     // 10 minutes
+// iTunes Search (public, no auth)
+const ITUNES_SEARCH_URL  = 'https://itunes.apple.com/search';
+const ITUNES_COUNTRY     = 'us';
+const ITUNES_TIMEOUT_MS  = 2500;
+
+const ITUNES_TTL_HIT_MS  = 1000 * 60 * 60 * 12; // 12 hours
+const ITUNES_TTL_MISS_MS = 1000 * 60 * 10;      // 10 minutes
 
 /* =========================
  * Helpers
  * ========================= */
+
+// Bind LAN fetches to LOCAL_ADDRESS to avoid dual-NIC weirdness.
+function agentForUrl(url) {
+  const isLan = url.startsWith(MOODE_BASE_URL);
+  const isHttps = url.startsWith('https:');
+  if (isLan) return isHttps ? lanHttpsAgent : lanHttpAgent;
+  return isHttps ? defaultHttpsAgent : defaultHttpAgent;
+}
+
+async function fetchJson(url) {
+  const resp = await fetch(url, {
+    headers: { Accept: 'application/json' },
+    agent: agentForUrl(url),
+    cache: 'no-store',
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status} from ${url}`);
+  return resp.json();
+}
+
+async function fetchText(url) {
+  const resp = await fetch(url, {
+    headers: { Accept: 'text/plain' },
+    agent: agentForUrl(url),
+    cache: 'no-store',
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status} from ${url}`);
+  return resp.text();
+}
+
+async function fetchJsonWithTimeout(url, ms) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+
+  try {
+    const resp = await fetch(url, {
+      headers: { Accept: 'application/json' },
+      agent: agentForUrl(url),
+      signal: controller.signal,
+      cache: 'no-store',
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} from ${url}`);
+    return await resp.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function isStreamPath(file) {
   return !!file && file.includes('://');
@@ -70,6 +128,7 @@ function isAirplayFile(file) {
   return String(file || '').toLowerCase() === 'airplay active';
 }
 
+// Used server-side (node): quick decode for moOde titles
 function decodeHtmlEntities(str) {
   if (!str || typeof str !== 'string') return '';
   return str
@@ -123,7 +182,6 @@ function parseDashPackedClassicalTitle(rawTitle) {
     };
   }
 
-  // Unknown length but still structured-ish
   return { kind: 'dashN', rawParts: parts };
 }
 
@@ -135,51 +193,6 @@ function normalizeCoverUrl(coverurl) {
 
 function makeAlbumKey({ artist, album, date }) {
   return `${(artist || '').toLowerCase()}|${(album || '').toLowerCase()}|${(date || '')}`;
-}
-
-function agentForUrl(url) {
-  const isLan = url.startsWith(MOODE_BASE_URL);
-  const isHttps = url.startsWith('https:');
-  if (isLan) return isHttps ? lanHttpsAgent : lanHttpAgent;
-  return isHttps ? defaultHttpsAgent : defaultHttpAgent;
-}
-
-async function fetchJson(url) {
-  const resp = await fetch(url, {
-    headers: { Accept: 'application/json' },
-    agent: agentForUrl(url),
-    cache: 'no-store',
-  });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status} from ${url}`);
-  return resp.json();
-}
-
-async function fetchText(url) {
-  const resp = await fetch(url, {
-    headers: { Accept: 'text/plain' },
-    agent: agentForUrl(url),
-    cache: 'no-store',
-  });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status} from ${url}`);
-  return resp.text();
-}
-
-async function fetchJsonWithTimeout(url, ms) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
-
-  try {
-    const resp = await fetch(url, {
-      headers: { Accept: 'application/json' },
-      agent: agentForUrl(url),
-      signal: controller.signal,
-      cache: 'no-store',
-    });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status} from ${url}`);
-    return await resp.json();
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 function normalizeMoodeStatus(raw) {
@@ -206,6 +219,14 @@ function normalizeMoodeStatus(raw) {
 
   const percent = duration > 0 ? Math.round((elapsed / duration) * 100) : 0;
   return { state, elapsed, duration, percent };
+}
+
+// Keep: moOde’s status JSON indexes for nextsong/nextsongid (matches your live output)
+function moodeVal(raw, n) {
+  const s = raw?.[String(n)];
+  if (!s || typeof s !== 'string') return '';
+  const i = s.indexOf(':');
+  return i >= 0 ? s.slice(i + 1).trim() : s.trim();
 }
 
 function mpdFileToLocalPath(mpdFile) {
@@ -255,6 +276,165 @@ async function metaflacTagMulti(tag, filePath) {
 }
 
 /* =========================
+ * MPD TCP helper (for /next-up)
+ * ========================= */
+
+function mpdQueryRaw(command, timeoutMs = 3000) {
+  return new Promise((resolve, reject) => {
+    const sock = net.createConnection({
+      host: MPD_HOST,
+      port: MPD_PORT,
+      // localAddress: LOCAL_ADDRESS, // optional; your nc test says it's fine either way
+    });
+
+    let buf = '';
+    let finished = false;
+    let greetingSeen = false;
+    let commandSent = false;
+
+    const finish = (err) => {
+      if (finished) return;
+      finished = true;
+      try { sock.destroy(); } catch {}
+      err ? reject(err) : resolve(buf);
+    };
+
+    sock.setTimeout(timeoutMs, () => finish(new Error('mpd timeout')));
+    sock.on('error', finish);
+
+    function hasTerminalOK(s) {
+      // MPD command terminator is a line containing only "OK"
+      return /(?:\r?\n)OK\r?\n/.test(s) || /^OK\r?\n/.test(s);
+    }
+
+    function hasACK(s) {
+      return /(?:\r?\n)ACK /.test(s) || /^ACK /.test(s);
+    }
+
+    sock.on('data', (d) => {
+      buf += d.toString('utf8');
+
+      // 1) Wait for greeting before sending any commands.
+      if (!greetingSeen) {
+        // Greeting always starts with "OK MPD "
+        if (buf.includes('OK MPD ')) {
+          // Make sure we have the full greeting line ending
+          if (buf.includes('\n')) {
+            greetingSeen = true;
+          } else {
+            return;
+          }
+        } else {
+          return;
+        }
+      }
+
+      // 2) Send command once after greeting is seen.
+      if (!commandSent) {
+        commandSent = true;
+        sock.write(`${command}\nclose\n`);
+        return;
+      }
+
+      // 3) After command is sent, finish on ACK or terminal OK.
+      if (hasACK(buf) || hasTerminalOK(buf)) {
+        finish();
+      }
+    });
+
+    sock.on('connect', () => {
+      // do nothing here; we wait for greeting in 'data'
+    });
+
+    sock.on('end', () => finish());
+  });
+}
+
+async function mpdQueryRawDebug(command) {
+  const raw = await mpdQueryRaw(command);
+
+  return {
+    command,
+    rawLength: raw.length,
+    rawVisible: raw
+      .replace(/\r/g, '\\r')
+      .replace(/\n/g, '\\n\n'),
+    sawOK: /\nOK(\n|$)/.test(raw),
+    sawACK: /\nACK /.test(raw),
+  };
+}
+
+// Parse the FIRST block of "key: value" lines into a case-insensitive map.
+function parseMpdFirstBlock(txt) {
+  const out = {};
+  const lines = String(txt || '').split('\n');
+
+  for (const line of lines) {
+    if (!line) continue;
+    if (line.startsWith('OK MPD ')) continue;
+    if (line === 'OK') break;
+    if (line.startsWith('ACK')) break;
+
+    const i = line.indexOf(':');
+    if (i <= 0) continue;
+
+    const k = line.slice(0, i).trim().toLowerCase();
+    const v = line.slice(i + 1).trim();
+
+    if (out[k] === undefined) out[k] = v;
+  }
+  return out;
+}
+
+async function mpdPlaylistInfoById(songid) {
+  if (songid === '' || songid === null || songid === undefined) return null;
+
+  const raw = await mpdQueryRaw(`playlistid ${songid}`);
+  if (!raw || raw.includes('ACK')) return null;
+
+  const kv = parseMpdFirstBlock(raw);
+
+  const file = kv.file || '';
+  const title = kv.title || '';
+  const artist = kv.artist || '';
+  const album = kv.album || '';
+  const id = kv.id || String(songid);
+  const pos = kv.pos || '';
+
+  if (!file && !title && !artist) return null;
+
+  return { file, title, artist, album, songid: id, songpos: pos };
+}
+
+async function mpdPlaylistInfoByPos(songpos, debug = false) {
+  if (songpos === '' || songpos === null || songpos === undefined) return null;
+
+  const n = Number(songpos);
+  if (!Number.isFinite(n) || n < 0) return null;
+
+  const cmd = `playlistinfo ${n}:${n + 1}`;
+  const raw = await mpdQueryRaw(cmd);
+
+  // If MPD returns just greeting + OK, raw may look "valid" but contain no block.
+  if (!raw || raw.includes('ACK')) return debug ? { _raw: raw, _cmd: cmd, _fail: 'empty-or-ack' } : null;
+
+  const kv = parseMpdFirstBlock(raw);
+
+  const file = kv.file || '';
+  const title = kv.title || '';
+  const artist = kv.artist || '';
+  const album = kv.album || '';
+  const id = kv.id || '';
+  const pos = kv.pos || String(n);
+
+  if (!file && !title && !artist) {
+    return debug ? { _raw: raw, _cmd: cmd, _fail: 'no-fields' } : null;
+  }
+
+  return { file, title, artist, album, songid: id, songpos: pos };
+}
+
+/* =========================
  * Caches
  * ========================= */
 
@@ -299,7 +479,7 @@ async function getDeepMetadataCached(mpdFile) {
 }
 
 /* =========================
- * iTunes artwork for RADIO/AIRPLAY (optional)
+ * iTunes artwork for RADIO (optional)
  * ========================= */
 
 function pickArtFromItunesItem(item) {
@@ -368,17 +548,13 @@ function pickBestItunesAlbum(results, wantAlbum, wantLabel) {
 
     let score = 0;
 
-    // Album name match
     if (albumNeedle && name === albumNeedle) score += 100;
     else if (albumNeedle && name.includes(albumNeedle)) score += 40;
 
-    // Label match (iTunes doesn't filter by label; use copyright as a tie-break)
     if (labelNeedle && labelNeedle.length >= 3 && copyright.includes(labelNeedle)) score += 20;
 
-    // Classical bias
     if (genre.includes('classical')) score += 5;
 
-    // Prefer items with artwork
     if (r.artworkUrl100 || r.artworkUrl60) score += 5;
 
     if (score > bestScore) {
@@ -447,13 +623,179 @@ function parseAplmeta(txt) {
   const fmt = (parts[5] || '').trim();        // e.g. ALAC/AAC
 
   const coverUrl = coverRel ? normalizeCoverUrl('/' + coverRel.replace(/^\/+/, '')) : '';
-
   return { title, artist, album, duration, coverRel, coverUrl, format: fmt };
 }
 
 /* =========================
- * Route
+ * Routes
  * ========================= */
+
+app.get('/next-up', async (req, res) => {
+    const debug = req.query.debug === '1';
+
+    try {
+        // Current song + status from moOde
+        const song = await fetchJson(`${MOODE_BASE_URL}/command/?cmd=get_currentsong`);
+        const statusRaw = await fetchJson(`${MOODE_BASE_URL}/command/?cmd=status`);
+
+        const file = song.file || '';
+        const isStream = isStreamPath(file);
+        const isAirplay =
+            isAirplayFile(file) ||
+            String(song.encoded || '').toLowerCase() === 'airplay';
+
+        // Streams and AirPlay never have a next-up
+        if (isStream || isAirplay) {
+            return res.json({
+                ok: true,
+                next: null,
+                ...(debug ? { reason: 'stream-or-airplay' } : {}),
+            });
+        }
+
+        // Extract nextsong fields
+        const nextsongRaw = moodeVal(statusRaw, 18);   // "nextsong: N"
+        const nextsongid  = moodeVal(statusRaw, 19);   // "nextsongid: ID"
+
+        if (
+            nextsongRaw === null ||
+            nextsongRaw === undefined ||
+            String(nextsongRaw).trim() === ''
+        ) {
+            return res.json({
+                ok: true,
+                next: null,
+                ...(debug ? { reason: 'no-nextsong' } : {}),
+            });
+        }
+
+        const nextPos = Number.parseInt(String(nextsongRaw).trim(), 10);
+        if (!Number.isFinite(nextPos) || nextPos < 0) {
+            return res.json({
+                ok: true,
+                next: null,
+                ...(debug
+                    ? { nextsong: nextsongRaw, nextsongid, reason: 'bad-nextsong' }
+                    : {}),
+            });
+        }
+
+        let next = null;
+        let nextPos2 = null;
+        let nextsongid2 = '';
+
+        /* =========================
+         * Attempt 1: playlistinfo by position
+         * ========================= */
+
+        try {
+            const cmd = `playlistinfo ${nextPos}:${nextPos + 1}`;
+            const raw = await mpdQueryRaw(cmd);
+            const kv  = parseMpdFirstBlock(raw);
+
+            const file2   = kv.file || '';
+            const title2  = kv.title || '';
+            const artist2 = kv.artist || '';
+            const album2  = kv.album || '';
+            const id2     = kv.id || '';
+            const pos2    = kv.pos || String(nextPos);
+
+            if (file2 || title2 || artist2) {
+                next = {
+                    file: file2,
+                    title: title2,
+                    artist: artist2,
+                    album: album2,
+                    songid: id2,
+                    songpos: pos2,
+                };
+            }
+        } catch {
+            // ignore -- fall through to retry paths
+        }
+
+        /* =========================
+         * Attempt 2: playlistid fallback
+         * ========================= */
+
+        if (!next && nextsongid) {
+            next = await mpdPlaylistInfoById(nextsongid);
+        }
+
+        /* =========================
+         * Attempt 3: re-fetch status once (race protection)
+         * ========================= */
+
+        if (!next) {
+            const statusRaw2 = await fetchJson(`${MOODE_BASE_URL}/command/?cmd=status`);
+            const nextsongRaw2 = moodeVal(statusRaw2, 18);
+            nextsongid2 = moodeVal(statusRaw2, 19);
+
+            nextPos2 = Number.parseInt(String(nextsongRaw2).trim(), 10);
+
+            if (Number.isFinite(nextPos2) && nextPos2 >= 0) {
+                next = await mpdPlaylistInfoByPos(nextPos2);
+            }
+
+            if (!next && nextsongid2) {
+                next = await mpdPlaylistInfoById(nextsongid2);
+            }
+        }
+
+        /* =========================
+         * Final result
+         * ========================= */
+
+        if (!next) {
+            return res.json({
+                ok: true,
+                next: null,
+                ...(debug
+                    ? {
+                        nextsong: nextPos,
+                        nextsongid,
+                        nextsong2: nextPos2,
+                        nextsongid2,
+                        reason: 'mpd-playlistinfo-no-match',
+                        mpdHost: MPD_HOST,
+                        mpdPort: MPD_PORT,
+                        localAddress: LOCAL_ADDRESS,
+                    }
+                    : {}),
+            });
+        }
+
+        return res.json({
+            ok: true,
+            next: {
+                songid: next.songid || nextsongid2 || nextsongid || '',
+                songpos: next.songpos || String(nextPos2 ?? nextPos),
+                title: next.title || '',
+                artist: next.artist || '',
+                album: next.album || '',
+                file: next.file || '',
+            },
+            ...(debug
+                ? {
+                    nextsong: nextPos,
+                    nextsongid,
+                    nextsong2: nextPos2,
+                    nextsongid2,
+                    reason: 'ok',
+                }
+                : {}),
+        });
+
+    } catch (err) {
+        return res.status(200).json({
+            ok: false,
+            next: null,
+            ...(debug
+                ? { error: err?.message || String(err), reason: 'exception' }
+                : {}),
+        });
+    }
+});
 
 app.get('/now-playing', async (req, res) => {
   const debug = req.query.debug === '1';
@@ -485,8 +827,6 @@ app.get('/now-playing', async (req, res) => {
     let altArtUrl = '';
 
     let airplayInfoLine = '';
-    let airplayCoverUrl = '';
-    let airplayFormat = '';
 
     // AIRPLAY: override fields from aplmeta.txt (matches moOde UI)
     if (airplay) {
@@ -497,14 +837,9 @@ app.get('/now-playing', async (req, res) => {
         artist = ap.artist || artist || '';
         title = ap.title || title || '';
         album = ap.album || album || 'AirPlay Source';
-        airplayCoverUrl = ap.coverUrl || '';
-        airplayFormat = ap.format || '';
 
-        // Prefer the cover from moOde’s airplay-covers
-        altArtUrl = airplayCoverUrl;
-
-        // moOde file-info line style: "ALAC/AAC"
-        airplayInfoLine = airplayFormat || 'AirPlay';
+        altArtUrl = ap.coverUrl || '';
+        airplayInfoLine = ap.format || 'AirPlay';
       } catch {
         airplayInfoLine = 'AirPlay';
       }
@@ -566,16 +901,11 @@ app.get('/now-playing', async (req, res) => {
     if (stream) {
       const decodedTitle = decodeHtmlEntities(song.title);
 
-      // Try both approaches:
-      // 1) "Artist - Title" for pop stations
       const simple = splitArtistDashTitle(decodedTitle);
-
-      // 2) Packed WFMT classical: "Composer - Work - Performers - Album - Label"
       const packed = parseDashPackedClassicalTitle(decodedTitle);
 
       debugRadioParsed = { simple, packed };
 
-      // Prefer packed albumTerm if present (WFMT)
       if (packed?.album) {
         radioAlbum = packed.album || '';
         radioLabel = packed.label || '';
@@ -588,7 +918,6 @@ app.get('/now-playing', async (req, res) => {
         radioYear = it.year || '';
         debugItunesReason = it.reason || '';
       } else if (simple?.artist && simple?.title) {
-        // Fallback: song-style lookup (Classic FM, etc.)
         const it = await lookupItunesFirst(simple.artist, simple.title, debug);
         altArtUrl = it.url || '';
         radioAlbum = it.album || '';
@@ -608,11 +937,9 @@ app.get('/now-playing', async (req, res) => {
       albumArtUrl: albumArtUrl || '',
       altArtUrl: altArtUrl || '',
 
-      // Radio enrichment (UI can use these)
       radioAlbum,
       radioYear,
 
-      // Extra radio enrichment (optional UI use later)
       radioLabel,
       radioComposer,
       radioWork,
@@ -650,8 +977,35 @@ app.get('/now-playing', async (req, res) => {
 /* =========================
  * Start
  * ========================= */
+ app.get('/_debug/mpd', async (req, res) => {
+  try {
+    const statusRaw = await fetchJson(`${MOODE_BASE_URL}/command/?cmd=status`);
+    const nextsongRaw = moodeVal(statusRaw, 18);
+    const nextsongid  = moodeVal(statusRaw, 19);
+
+    const pos = Number.parseInt(String(nextsongRaw).trim(), 10);
+
+    const byPos = Number.isFinite(pos)
+      ? await mpdQueryRawDebug(`playlistinfo ${pos}:${pos + 1}`)
+      : null;
+
+    const byId = nextsongid
+      ? await mpdQueryRawDebug(`playlistid ${nextsongid}`)
+      : null;
+
+    res.json({
+      nextsongRaw,
+      nextsongid,
+      byPos,
+      byId,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`moOde now-playing server running on port ${PORT}`);
   console.log(`Endpoint: http://${LOCAL_ADDRESS}:${PORT}/now-playing`);
+  console.log(`Endpoint: http://${LOCAL_ADDRESS}:${PORT}/next-up`);
 });

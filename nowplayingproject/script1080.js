@@ -17,6 +17,10 @@
 // - AirPlay MPD state="stop" safe (won't clear UI)
 // - Progress bar hidden for radio + AirPlay
 
+const NEXT_UP_URL = 'http://10.0.0.233:3000/next-up';
+const ENABLE_NEXT_UP = true;
+
+let lastNextUpKey = '';
 const NOW_PLAYING_URL = 'http://10.0.0.233:3000/now-playing';
 const AIRPLAY_ICON_URL = 'http://10.0.0.233:8000/airplay.png?v=1';
 // Pause "screensaver" behavior
@@ -120,6 +124,10 @@ function fetchNowPlaying() {
           updateProgressBarPercent(Math.round((data.elapsed / data.duration) * 100));
         }
       }
+      
+      if (ENABLE_NEXT_UP) {
+        updateNextUp({ isAirplay, isStream });
+      }
 
       // Track-change detection
       let baseKey = '';
@@ -194,6 +202,67 @@ function setModeLogo({ isStream, isAirplay, stationLogoUrl }) {
 /* =========================
  * Helpers
  * ========================= */
+ 
+function updateNextUp({ isAirplay, isStream }) {
+  const el = document.getElementById('next-up');
+  if (!el) return;
+
+  // AirPlay: don't show Next Up
+  if (isAirplay) {
+    el.textContent = '';
+    lastNextUpKey = '';
+    return;
+  }
+
+  // Optional: you can decide whether to show for radio streams.
+  // If you don't want it for radio either, uncomment the block below:
+  /*
+  if (isStream) {
+    el.textContent = '';
+    lastNextUpKey = '';
+    return;
+  }
+  */
+
+  fetch(NEXT_UP_URL, { cache: 'no-store' })
+    .then(r => (r.ok ? r.json() : null))
+    .then(x => {
+      if (!x || x.ok !== true) {
+        el.textContent = '';
+        lastNextUpKey = '';
+        return;
+      }
+
+      const next = x.next;
+      if (!next) {
+        el.textContent = '';
+        lastNextUpKey = '';
+        return;
+      }
+
+      // Accept either title or file as "something we can show"
+      const title = String(next.title || '').trim();
+      const file  = String(next.file || '').trim();
+
+      if (!title && !file) {
+        el.textContent = '';
+        lastNextUpKey = '';
+        return;
+      }
+
+      const artist = String(next.artist || '').trim();
+      const key = `${next.songid || ''}|${artist}|${title}|${file}`;
+      if (key === lastNextUpKey) return;
+      lastNextUpKey = key;
+
+      const showTitle = title || file.split('/').pop() || file;
+      const showArtist = artist ? ` -- ${artist}` : '';
+      el.textContent = `Next up: ${showTitle}${showArtist}`;
+    })
+    .catch(() => {
+      // quiet
+    });
+}
  
  function hideModeLogo() {
   const logoEl = document.getElementById('mode-logo');

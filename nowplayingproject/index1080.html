@@ -118,6 +118,48 @@ body {
   margin-right: 100px;
 }
 
+/* ===== Next Up overlay ===== */
+:root{
+  --nextup-left-pad: 0px;       /* aligns to right edge of text column */
+  --nextup-bottom-gap: 18px;     /* vertical gap above progress bar */
+  --nextup-max-width: 70%;       /* keep it from spanning too wide */
+}
+
+/* Make room at bottom so overlay doesn't collide with other bottom elements */
+.text-column{
+  padding-bottom: 16px; /* slightly more breathing room */
+}
+
+/* Overlay itself */
+#next-up{
+  position: absolute;
+  left: var(--nextup-right-pad);
+
+  /* sit above the progress bar */
+  bottom: calc(8px + var(--nextup-bottom-gap)); /* 8px = progress bar height */
+
+  max-width: var(--nextup-max-width);
+  text-align: right;
+
+  font-size: 26px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.92);
+  text-shadow: 0 2px 10px rgba(0,0,0,0.85);
+
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+
+  z-index: 15;
+
+  /* optional readability bubble */
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: rgba(0,0,0,0.30);
+  backdrop-filter: blur(6px);
+}
+
+
 /* Progress Bar */
 #progress-bar-wrapper {
   width: 900px;
@@ -216,6 +258,9 @@ body {
 
       <!-- Combined Personnel + Producer Info -->
       <div id="personnel-info"></div>
+
+      <!-- Next Up -->
+      <div id="next-up" class="fade-in"></div>
 
       <!-- Progress Bar (tracks only) -->
       <div id="progress-bar-wrapper">
