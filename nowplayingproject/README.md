@@ -108,7 +108,7 @@ http://<PI2_IP>:8000/index1080.html
 You can skip Pi #3 entirely and view the display from any computer or tablet.
 
 ⸻
-```
+
 Project Files
 
 File             Location   Purpose
@@ -118,7 +118,6 @@ index1080.html   Pi #2      1080p fullscreen UI
 script1080.js    Pi #2      UI logic, progress bar, caching
 airplay.png      Pi #2      Fallback artwork for AirPlay
 
-```
 ⸻
 
 Networking Requirements
@@ -135,10 +134,10 @@ sudo apt update
 sudo apt install -y nodejs npm flac
 
 Verify:
-
+```
 node —version
 metaflac —version
-
+```
 
 ⸻
 
@@ -182,9 +181,9 @@ pm2 start server.mjs —name moode-now-playing
 pm2 save
 
 Test:
-
+```
 curl http://<PI2_IP>:3000/now-playing | jq
-
+```
 
 ⸻
 
@@ -200,13 +199,13 @@ The web server only serves static files:
 There is no backend logic here.
 
 ⸻
-```
+
 The Simplest (Recommended) Web Server
 
 From the directory containing the UI files:
-
+```
 python3 -m http.server 8000
-
+```
 That’s it.
 
 This:
@@ -216,7 +215,7 @@ This:
 	•	Is perfectly adequate
 
 Test:
-
+```
 curl http://<PI2_IP>:8000/index1080.html
 
 ```
@@ -230,6 +229,7 @@ http://<PI2_IP>:8000/index1080.html
 
 From the display Pi (Chromium kiosk):
 
+```
 chromium \
   —kiosk \
   —disable-infobars \
@@ -237,13 +237,14 @@ chromium \
   —disable-session-crashed-bubble \
   http://<PI2_IP>:8000/index1080.html
 
+```
 Hide mouse cursor:
 
 unclutter -idle 0 &
 
 
 ⸻
-```
+
 Common Pitfalls
 
 ⚠️ Avoid these mistakes
@@ -251,7 +252,7 @@ Common Pitfalls
 	•	Don’t run the web server on Pi #3
 	•	Don’t point the UI directly at moOde
 	•	Don’t serve the UI from port 3000
-```
+
 ⸻
 
 Why Three Pis?
