@@ -108,7 +108,7 @@ http://<PI2_IP>:8000/index1080.html
 You can skip Pi #3 entirely and view the display from any computer or tablet.
 
 ⸻
-
+```
 Project Files
 
 File             Location   Purpose
@@ -118,7 +118,7 @@ index1080.html   Pi #2      1080p fullscreen UI
 script1080.js    Pi #2      UI logic, progress bar, caching
 airplay.png      Pi #2      Fallback artwork for AirPlay
 
-
+```
 ⸻
 
 Networking Requirements
@@ -200,7 +200,7 @@ The web server only serves static files:
 There is no backend logic here.
 
 ⸻
-
+```
 The Simplest (Recommended) Web Server
 
 From the directory containing the UI files:
@@ -219,7 +219,7 @@ Test:
 
 curl http://<PI2_IP>:8000/index1080.html
 
-
+```
 ⸻
 
 Viewing the Display
@@ -243,7 +243,7 @@ unclutter -idle 0 &
 
 
 ⸻
-
+```
 Common Pitfalls
 
 ⚠️ Avoid these mistakes
@@ -251,7 +251,7 @@ Common Pitfalls
 	•	Don’t run the web server on Pi #3
 	•	Don’t point the UI directly at moOde
 	•	Don’t serve the UI from port 3000
-
+```
 ⸻
 
 Why Three Pis?
