@@ -1,33 +1,67 @@
-// script1080.js -- DROP-IN (v1.4)
+// script1080.js -- moOde Now Playing Display (1080p)
 //
-// Includes:
-// - Double-buffer blurred background crossfade (background-a/background-b)
-// - Boot gating: wait for first bg art, snap it in place, then show UI
-// - Next Up (text + 75x75 art)
-// - Pause screensaver logic
-// - Radio stabilization + classical composer/work formatting
-// - Instrument abbrev expansion
-// - Lossless/HQ badge logic
+// ⚠️ USER CONFIGURATION REQUIRED ⚠️
 //
-// Notes:
-// - After boot, JS owns background-a/background-b opacity.
-// - CSS should NOT force background opacity in body.ready rules.
+// This file assumes a two-host layout:
+//
+//   • Pi #1 -- moOde Audio Player
+//       - Runs moOde
+//       - Hosts music playback
+//
+//   • Pi #2 -- API + Web Server
+//       - Runs moode-nowplaying-api.mjs (Node)
+//       - Serves JSON APIs on port 3000
+//       - Serves this UI on port 8000
+//
+// You MUST replace the placeholder IP/host values below
+// to match your own setup.
+//
+// ------------------------------------------------------
+// REQUIRED URL CONFIGURATION
+// ------------------------------------------------------
+//
+// API_BASE
+//   → Base URL of the Pi running moode-nowplaying-api.mjs
+//   → Must include protocol and port
+//
+// MOODE_BASE
+//   → Base URL of the Pi running moOde Audio Player
+//   → Used only for default artwork and AirPlay visuals
+//
+// Example setups:
+//
+//   API_BASE (your pi that serves webpage index1080.html)   = 'http://pi2.local:3000'
+//   MOODE_BASE (your pi running moOde) = 'http://pi1.local'
+//
+//   API_BASE   = 'http://10.0.0.50:3000'
+//   MOODE_BASE = 'http://10.0.0.40'
+//
+// ------------------------------------------------------
 
-const NEXT_UP_URL = 'http://10.0.0.233:3000/next-up';
+const API_BASE   = 'http://YOUR_API_HOST:3000';
+const MOODE_BASE = 'http://YOUR_MOODE_HOST';
+
+// ------------------------------------------------------
+// Derived endpoints (do NOT edit unless you know why)
+// ------------------------------------------------------
+
+const NOW_PLAYING_URL = `${API_BASE}/now-playing`;
+const NEXT_UP_URL     = `${API_BASE}/next-up`;
+const RATING_URL      = `${API_BASE}/rating/current`;
+const RATINGS_BASE_URL = API_BASE;
+
+// moOde-provided assets
+const AIRPLAY_ICON_URL = `${MOODE_BASE}/airplay.png`;
+const PAUSE_ART_URL    = `${MOODE_BASE}/images/default-album-cover.png`;
+
+// ------------------------------------------------------
+// Feature toggles
+// ------------------------------------------------------
+
 const ENABLE_NEXT_UP = true;
-
-let lastNextUpKey = '';
-let lastNextUpFetchTs = 0;
-const NEXT_UP_REFRESH_MS = 5000; // refresh Next Up every 5s
-
-const NOW_PLAYING_URL = 'http://10.0.0.233:3000/now-playing';
-const AIRPLAY_ICON_URL = 'http://10.0.0.233:8000/airplay.png?v=1';
-
-const ENABLE_BACKGROUND_ART = true; // set false to disable background updates entirely
-
-// Pause "screensaver" behavior
+const ENABLE_BACKGROUND_ART = true;
+const RATINGS_ENABLED = true;
 const ENABLE_PAUSE_SCREENSAVER = true;
-const PAUSE_ART_URL = 'http://10.0.0.254/images/default-album-cover.png';
 const PAUSE_MOVE_INTERVAL_MS = 8000;
 const PAUSE_ART_MIN_MARGIN_PX = 20;
 const PAUSE_SCREENSAVER_DELAY_MS = 5000;
@@ -36,6 +70,20 @@ let pauseOrStopSinceTs = 0;
 let pauseMode = false;
 let lastPauseMoveTs = 0;
 let justResumedFromPause = false;
+
+let nowPlayingTimer = 0;
+const NOW_PLAYING_POLL_MS = 1000;
+
+function startNowPlayingPoll() {
+  if (nowPlayingTimer) return;
+  nowPlayingTimer = setInterval(fetchNowPlaying, NOW_PLAYING_POLL_MS);
+}
+
+function stopNowPlayingPoll() {
+  if (!nowPlayingTimer) return;
+  clearInterval(nowPlayingTimer);
+  nowPlayingTimer = 0;
+}
 
 // Progress animator (smooth between polls)
 let progressAnimRaf = 0;
@@ -70,6 +118,7 @@ function applyBackgroundToggleClass() {
 window.addEventListener('load', () => {
   applyBackgroundToggleClass();
   attachClickEventToAlbumArt();
+  attachRatingsClickHandler();
   bootThenStart();
 });
 
@@ -85,8 +134,8 @@ async function bootThenStart() {
   // Fail-safe: show UI + start polling anyway
   if (!data) {
     markReadyOnce();
-    fetchNowPlaying();
-    setInterval(fetchNowPlaying, 1000);
+    fetchNowPlaying();     // kick once
+    startNowPlayingPoll(); // then steady poll
     return;
   }
 
@@ -98,8 +147,10 @@ async function bootThenStart() {
   // If bg disabled or no art, don't wait
   if (!ENABLE_BACKGROUND_ART || !firstArtUrl) {
     updateUI(data);
+    if (!data.isStream && !data.isAirplay) loadCurrentRating();
+    else clearStars();
     markReadyOnce();
-    setInterval(fetchNowPlaying, 1000);
+    startNowPlayingPoll();
     return;
   }
 
@@ -142,7 +193,7 @@ async function bootThenStart() {
 
   updateUI(data);
   markReadyOnce();
-  setInterval(fetchNowPlaying, 1000);
+  startNowPlayingPoll();
 }
 
 function preloadImage(url) {
@@ -171,36 +222,36 @@ function setBackgroundCrossfade(url) {
   if (!a || !b) return;
 
   const nextUrl = String(url || '').trim();
+  const nextKey = normalizeArtKey(nextUrl);
 
-  // Clear request: blank both cleanly
-  if (!nextUrl) {
+  if (!nextKey) {
     a.style.backgroundImage = 'none';
     b.style.backgroundImage = 'none';
     a.style.opacity = '1';
     b.style.opacity = '0';
     bgFront = 'a';
     bgUrlFront = '';
+    bgKeyFront = '';
     bgLoadingUrl = '';
+    bgLoadingKey = '';
     return;
   }
 
-  // Same as current? do nothing
-  if (nextUrl === bgUrlFront) return;
+  // ✅ compare by key, not raw URL
+  if (nextKey === bgKeyFront) return;
+  if (nextKey === bgLoadingKey) return;
 
-  // Already loading this? do nothing
-  if (nextUrl === bgLoadingUrl) return;
   bgLoadingUrl = nextUrl;
+  bgLoadingKey = nextKey;
 
   const img = new Image();
   img.onload = () => {
-    if (bgLoadingUrl !== nextUrl) return;
+    if (bgLoadingKey !== nextKey) return;
 
     const frontEl = (bgFront === 'a') ? a : b;
     const backEl  = (bgFront === 'a') ? b : a;
 
     backEl.style.backgroundImage = `url("${nextUrl}")`;
-
-    // Ensure front is visible BEFORE fade
     frontEl.style.opacity = '1';
     backEl.style.opacity = '0';
 
@@ -210,16 +261,145 @@ function setBackgroundCrossfade(url) {
 
       bgFront = (bgFront === 'a') ? 'b' : 'a';
       bgUrlFront = nextUrl;
+      bgKeyFront = nextKey;
       bgLoadingUrl = '';
+      bgLoadingKey = '';
     });
   };
 
   img.onerror = () => {
-    if (bgLoadingUrl === nextUrl) bgLoadingUrl = '';
+    if (bgLoadingKey === nextKey) {
+      bgLoadingUrl = '';
+      bgLoadingKey = '';
+    }
   };
 
   img.src = nextUrl;
 }
+
+function renderStars(rating) {
+  const el = document.getElementById('ratingStars');
+  if (!el) return;
+
+  if (!RATINGS_ENABLED || ratingDisabled) {
+    el.innerHTML = '';
+    el.style.display = 'none';
+    return;
+  }
+
+  el.style.display = 'inline-block';
+  el.innerHTML = '';
+
+  const r = Math.max(0, Math.min(5, Number(rating) || 0));
+  for (let i = 1; i <= 5; i++) {
+    const s = document.createElement('span');
+    s.textContent = '★';
+    s.dataset.value = String(i);
+
+    // ✅ add filled vs dim class
+    s.className = (i <= r) ? 'filled' : 'dim';
+
+    el.appendChild(s);
+  }
+}
+
+function clearStars() {
+  currentRating = 0;
+  ratingDisabled = true;
+  lastRatingFile = '';
+  renderStars(0);
+}
+
+let lastRatingKey = '';
+
+async function loadCurrentRating() {
+  const ratingEl = document.getElementById('ratingStars');
+  if (!ratingEl) return;
+
+  // 🚫 ratings never apply to radio or AirPlay
+  if (currentIsStream || currentIsAirplay) {
+    clearStars();
+    return;
+  }
+
+  // token to invalidate stale responses
+  const myToken = ++ratingReqToken;
+
+  try {
+    const r = await fetch(RATING_URL, { cache: 'no-store' });
+    const j = await r.json();
+
+    // ⛔ stale response -- another request started after this one
+    if (myToken !== ratingReqToken) return;
+
+    // ⛔ mode changed while request was in-flight
+    if (currentIsStream || currentIsAirplay) {
+      clearStars();
+      return;
+    }
+
+    if (!j || j.ok !== true || j.disabled) {
+      clearStars();
+      return;
+    }
+
+    const file = String(j.file || '').trim();
+    const rating = Math.max(0, Math.min(5, Number(j.rating) || 0));
+
+    ratingDisabled = false;
+    lastRatingFile = file;
+    currentRating = rating;
+
+    renderStars(rating);
+  } catch {
+    clearStars();
+  }
+}
+
+async function setCurrentRating(n) {
+  if (!RATINGS_ENABLED) return;
+
+  const r = Math.max(0, Math.min(5, Number(n) || 0));
+
+  try {
+    const resp = await fetch(`${RATINGS_BASE_URL}/rating/current`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rating: r }),
+    });
+
+    const j = await resp.json();
+
+    ratingDisabled = !!j.disabled || !j.file;
+    lastRatingFile = String(j.file || '');
+    currentRating = Number(j.rating) || 0;
+
+    renderStars(currentRating);
+  } catch {
+    // no-op
+  }
+}
+
+function attachRatingsClickHandler() {
+  if (!RATINGS_ENABLED) return;
+
+  document.addEventListener('click', (ev) => {
+    const t = ev.target;
+    if (!t || !t.dataset || !t.dataset.value) return;
+
+    // only react if user clicked inside ratingStars
+    const wrap = document.getElementById('ratingStars');
+    if (!wrap || ratingDisabled) return;
+    if (!wrap.contains(t)) return;
+
+    const n = parseInt(t.dataset.value, 10);
+    if (!Number.isFinite(n)) return;
+
+    // click same star again -> toggle off (0)
+    setCurrentRating(n === currentRating ? 0 : n);
+  });
+}
+
 
 /* =========================
  * Poller
@@ -236,10 +416,20 @@ function fetchNowPlaying() {
 
       const isAirplay = data.isAirplay === true;
       const isStream  = data.isStream === true;
+
+      // ✅ record current mode for async guards (ratings, etc.)
+      currentIsStream = isStream;
+      currentIsAirplay = isAirplay;
+
+      // ✅ Stars should never show for stream or AirPlay
+      if (isStream || isAirplay) {
+        clearStars();
+      }
       // Always clear Next Up when it should not be shown
       if (ENABLE_NEXT_UP && (pauseMode || isAirplay || isStream)) {
         clearNextUpUI();
       }
+
       // Track key (used for change detection)
       let baseKey = '';
       if (isAirplay) {
@@ -273,7 +463,11 @@ function fetchNowPlaying() {
         const delayMs = Number(PAUSE_SCREENSAVER_DELAY_MS) || 0;
 
         if (ENABLE_PAUSE_SCREENSAVER && elapsed >= delayMs) {
-          if (!pauseMode) setPausedScreensaver(true);
+          if (!pauseMode) {
+            setPausedScreensaver(true);
+            // IMPORTANT: keep polling so we can detect when playback resumes
+            // stopNowPlayingPoll();
+          }
 
           setProgressVisibility(true); // hide progress bar
           hideModeLogo();
@@ -286,6 +480,10 @@ function fetchNowPlaying() {
 
         if (pauseMode) {
           setPausedScreensaver(false);
+
+          // ✅ Force a repaint right now with the current payload
+          updateUI(data);
+
           justResumedFromPause = true;
           stopProgressAnimator(); // hard reset on resume
         }
@@ -332,10 +530,24 @@ function fetchNowPlaying() {
        * Track-change driven UI
        * ========================= */
 
+      // Local files + AirPlay path
       if (!isStream) {
         if (trackChanged) {
           currentTrackKey = baseKey;
           updateUI(data);
+
+          // ✅ Ratings: only for local files (not AirPlay)
+          if (!isAirplay) loadCurrentRating();
+          else clearStars();
+        }
+
+        // ✅ Ratings: refresh periodically during playback (so Shortcut changes show live)
+        if (!pauseMode && !isAirplay && RATINGS_ENABLED) {
+          const now = Date.now();
+          if ((now - (lastRatingFetchTs || 0)) >= RATING_REFRESH_MS) {
+            lastRatingFetchTs = now;
+            loadCurrentRating();
+          }
         }
 
         // Next Up: refresh on change OR periodic
@@ -349,7 +561,6 @@ function fetchNowPlaying() {
           }
         }
 
-        // ✅ clear here, but ALSO clear for radio below
         justResumedFromPause = false;
         return;
       }
@@ -363,7 +574,6 @@ function fetchNowPlaying() {
         updateUI({ ...data, _radioDisplay: stabilized });
       }
 
-      // ✅ important: clear for radio path too
       justResumedFromPause = false;
     })
     .catch(() => {});
@@ -582,12 +792,14 @@ function isPauseOrStopState(data) {
 
 function setPausedScreensaver(on) {
   pauseMode = on;
+  if (on) clearStars(); // ✅ entering pause screensaver: hide/clear stars
 
   document.body.style.backgroundColor = on ? '#000' : '';
   document.documentElement.style.backgroundColor = on ? '#000' : '';
 
   const artistEl = document.getElementById('artist-name');
   const trackEl  = document.getElementById('track-title');
+  const ratingEl = document.getElementById('ratingStars');
   const albumEl  = document.getElementById('album-link');
   const fileInfoText = document.getElementById('file-info-text');
   const hiresBadge = document.getElementById('hires-badge');
@@ -597,6 +809,7 @@ function setPausedScreensaver(on) {
   const show = !on;
   if (artistEl) artistEl.style.display = show ? '' : 'none';
   if (trackEl)  trackEl.style.display  = show ? '' : 'none';
+  if (ratingEl) ratingEl.style.display = show ? '' : 'none';
   if (albumEl)  albumEl.style.display  = show ? '' : 'none';
   if (fileInfoText) fileInfoText.style.display = show ? '' : 'none';
   if (hiresBadge) hiresBadge.style.display = show ? '' : 'none';
@@ -626,6 +839,10 @@ function setPausedScreensaver(on) {
       artEl.style.width = '';
       artEl.style.height = '';
       artEl.style.opacity = '';
+      
+      // ✅ Coming out of pause: force artwork to repaint even if track didn't change
+      lastAlbumArtKey = '';
+      lastAlbumArtUrl = '';
     }
   }
 
@@ -667,6 +884,14 @@ function movePauseArtRandomly(force = false) {
 /* =========================
  * Text helpers (radio/classical/abbrevs)
  * ========================= */
+ 
+function normalizeArtKey(url) {
+  const s = String(url || '').trim();
+  if (!s) return '';
+  // ignore cache-busters and fragments so equality is stable
+  return s.split('#')[0].split('?')[0];
+}
+ 
 
 function normalizeDashSpacing(s) {
   return String(s || '')
@@ -798,6 +1023,7 @@ function expandInstrumentAbbrevs(input) {
     ['cl', 'clarinet'],
     ['bcl','bass clarinet'],
     ['fl', 'flute'],
+    ['fh', 'horn'],
     ['g',  'guitar'],
     ['pic', 'piccolo'],
     ['bn', 'bassoon'],
@@ -1021,16 +1247,17 @@ function updateUI(data) {
       ? String(data.altArtUrl).trim()
       : (data.albumArtUrl || '');
 
-  const artChanged = newArtUrl && newArtUrl !== lastAlbumArtUrl;
+  const newArtKey = normalizeArtKey(newArtUrl);
+  const artChanged = newArtKey && newArtKey !== lastAlbumArtKey;
 
   if (artChanged) {
-    lastAlbumArtUrl = newArtUrl;
+    lastAlbumArtKey = newArtKey;
+    lastAlbumArtUrl = newArtUrl; // keep raw URL for <img src>
 
     if (artEl) artEl.src = newArtUrl;
 
     if (ENABLE_BACKGROUND_ART) {
       setBackgroundCrossfade(newArtUrl);
-
       if (artBgEl) {
         artBgEl.style.backgroundImage = `url("${newArtUrl}")`;
         artBgEl.style.backgroundSize = 'cover';
@@ -1041,6 +1268,7 @@ function updateUI(data) {
       if (artBgEl) artBgEl.style.backgroundImage = 'none';
     }
   }
+  console.log('ART raw=', newArtUrl, ' key=', newArtKey, ' changed=', artChanged);
 }
 
 /* =========================
@@ -1122,4 +1350,5 @@ function clearUI() {
     logoEl.style.display = 'none';
     logoEl.removeAttribute('src');
   }
+  clearStars();
 }

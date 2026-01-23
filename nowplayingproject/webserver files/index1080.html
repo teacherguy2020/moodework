@@ -1,9 +1,9 @@
-<!-- index1080.html (drop-in replacement) -->
+<!-- index1080.html v1.4 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Now Playing 1080</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
 
@@ -27,7 +27,6 @@
        - AFTER boot, JS controls bg opacity + crossfade
     */
 
-    /* Boot: hide everything */
     body.booting #content {
       opacity: 0;
       transition: opacity 500ms ease;
@@ -38,16 +37,11 @@
       opacity: 0;
     }
 
-    /* Ready: show content, but do NOT leave a transition on it (prevents later re-fades) */
+    /* Ready: show content, but do NOT leave a transition on it */
     body.ready #content {
       opacity: 1;
       transition: none;
     }
-
-    /* IMPORTANT:
-       - Do NOT force background opacity in body.ready.
-       - setBackgroundCrossfade() owns background-a/background-b opacity and transitions.
-    */
 
     /* Disable element fades during boot; boot gating owns visibility */
     body.booting .fade-in,
@@ -75,8 +69,20 @@
       transform: scale(1.08);
 
       z-index: -2;
-      opacity: 0;                       /* default hidden; JS decides which is visible */
-      transition: opacity 800ms ease;   /* keep crossfade always enabled */
+      opacity: 0;                     /* default hidden; JS decides which is visible */
+      transition: opacity 800ms ease; /* keep crossfade always enabled */
+    }
+
+    #content {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      justify-content: left;
+      width: 100%;
+      height: 100%;
+      padding: 0 100px;
+      gap: 100px;
+      z-index: 1;
     }
 
     #album-art-wrapper {
@@ -99,40 +105,24 @@
 
     #album-art-bg {
       position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
+      inset: 0;
       border-radius: 32px;
       filter: blur(18px) brightness(0.2);
       z-index: -1;
       transition: none;
     }
 
-    #content {
+    .text-column {
       display: flex;
-      flex-direction: row;
-      align-items: center;
-      justify-content: left;
+      flex-direction: column;
+      justify-content: flex-start;
+      align-items: flex-start;
+      gap: 20px;
+      height: 700px;
       width: 100%;
-      height: 100%;
-      padding-left: 100px;
-      padding-right: 100px;
-      gap: 100px;
-      z-index: 1;
-    }
-
-    .text-column{
-      display:flex;
-      flex-direction:column;
-      justify-content:flex-start;
-      align-items:flex-start;
-      gap:20px;
-      height:700px;
-      width:100%;
-      max-width:1100px;
-      position:relative;
-      padding-bottom:0; /* ✅ was 24px */
+      max-width: 1100px;
+      position: relative;
+      padding-bottom: 0;
     }
 
     #artist-name {
@@ -141,12 +131,50 @@
       text-shadow: 0 4px 14px rgba(0,0,0,0.9);
     }
 
+    /* Title row (title + stars inline) */
+    #titleLine {
+      display: flex;
+      align-items: baseline;
+      gap: 18px;
+      width: 100%;
+      flex-wrap: wrap;
+    }
+
     #track-title {
       font-size: 50px;
       font-weight: 600;
       text-shadow: 0 3px 12px rgba(0,0,0,0.9);
+      flex: 0 1 auto;
+      max-width: 100%;
     }
 
+    /* Stars wrapper */
+    .rating-stars {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: baseline;
+      cursor: pointer;
+      user-select: none;
+
+      font-size: 44px;
+      line-height: 1;
+      letter-spacing: 8px;
+      margin-top: 2px;
+      opacity: 0.95;
+
+      text-shadow: 0 3px 12px rgba(0,0,0,0.9);
+    }
+
+    /* Stars (shared) */
+    .rating-stars span.dim { opacity: 0.20; }
+
+    .rating-stars span.filled {
+      color: #d4af37; /* muted, classic gold (not neon) */
+
+      text-shadow:
+        0 2px 10px rgba(0,0,0,0.85),
+        0 0 1px rgba(0,0,0,0.6);
+    }
     #album-link {
       font-size: 48px;
       color: #ccc;
@@ -186,8 +214,8 @@
 
     /* ===== Next Up overlay ===== */
     :root {
-      --nextup-left-pad: 0px;        /* align with left edge of text column */
-      --nextup-bottom-gap: 20px;     /* vertical gap above progress bar */
+      --nextup-left-pad: 0px;
+      --nextup-bottom-gap: 20px;
     }
 
     #next-up {
@@ -242,7 +270,7 @@
     }
 
     #progress-fill {
-      height: 12px;                 /* KEEP 12px */
+      height: 12px; /* KEEP 12px */
       width: 100%;
       background: #4fc3f7;
       transform: scaleX(0);
@@ -252,11 +280,10 @@
       transition: none;
     }
 
-    /* Bottom-right mode logo (Radio icon or AirPlay icon) */
+    /* Bottom-right mode logo */
     #mode-logo {
       width: 100px;
       height: 100px;
-
       border-radius: 16px;
       object-fit: cover;
       box-shadow: 0 10px 30px rgba(0,0,0,0.6);
@@ -265,11 +292,10 @@
       right: 0;
       bottom: 0;
       opacity: 0.9;
-
       display: none;
     }
 
-    /* Modal overlay (click album art) */
+    /* Modal overlay */
     #artist-details-container {
       position: fixed;
       inset: 0;
@@ -310,13 +336,18 @@
         id="album-art"
         src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
         alt="Album Art"
-      >
+      />
     </div>
 
     <!-- Text Column -->
     <div class="text-column">
       <div id="artist-name"></div>
-      <div id="track-title"></div>
+
+      <!-- Title + Stars INLINE -->
+      <div id="titleLine">
+        <span id="track-title"></span>
+        <span id="ratingStars" class="rating-stars" aria-label="Rating"></span>
+      </div>
 
       <div id="album-info">
         <a id="album-link" href="javascript:void(0)"><span id="album-text"></span></a>
@@ -327,26 +358,21 @@
         <span id="hires-badge" class="hires-badge" style="display:none;">Lossless</span>
       </div>
 
-      <!-- Combined Personnel + Producer Info -->
       <div id="personnel-info"></div>
 
-      <!-- Next Up (overlay positioned via CSS) -->
       <div id="next-up">
         <img id="next-up-img" alt="" />
         <span id="next-up-text"></span>
       </div>
 
-      <!-- Progress Bar (tracks only) -->
       <div id="progress-bar-wrapper">
         <div id="progress-fill"></div>
       </div>
 
-      <!-- Bottom-right mode logo (radio icon or airplay.png) -->
       <img id="mode-logo" alt="" />
     </div>
   </div>
 
-  <!-- Album Art Click Modal -->
   <div id="artist-details-container">
     <div id="artist-details"></div>
   </div>
