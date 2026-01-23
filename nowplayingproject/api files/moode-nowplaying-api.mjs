@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * moode-nowplaying.mjs -- moOde Now-Playing API (Pi4)
+ * moode-nowplaying-api.mjs -- moOde Now-Playing API (Pi4)
  *
  * Primary goal:
  *  - Keep the LAN display endpoints stable and boring:
