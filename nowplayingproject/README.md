@@ -266,4 +266,4 @@ Flexibility
 	•	UI can be redesigned without touching playback
 
 
-![Alt text](img IMG_6007.jpeg)
+![Alt text](IMG_6007.jpeg)
