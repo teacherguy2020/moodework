@@ -45,7 +45,7 @@ metadata =
   cover_art_cache_directory = “/var/local/www/imagesw/airplay-covers”;
   pipe_name = “/tmp/shairport-sync-metadata”;
 };
-
+```
 AirPlay 2 remains on port 7000 (default, but may be explicit).
 
 ⸻
