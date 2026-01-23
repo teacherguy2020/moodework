@@ -1,0 +1,16 @@
+[Unit]
+Description=moOde AirPlay metadata reader (aplmeta)
+After=network.target shairport-sync.service nginx.service
+Wants=shairport-sync.service nginx.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/bin/bash /var/www/daemon/aplmeta-reader.sh
+Restart=on-failure
+RestartSec=2
+# prevent buffered pipes from "stalling" visibility
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
