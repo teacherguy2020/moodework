@@ -10,14 +10,14 @@ console.log('*** BOOT ***', new Date().toISOString(), 'version=', process.env.AW
 // --------------------
 // Env / Config
 // --------------------
-const MOODE_API_BASE = process.env.MOODE_API_BASE || 'https://moode.CHANGETOYOURPUBLICDOMAIN.com';
+const MOODE_API_BASE = process.env.MOODE_API_BASE || 'https://moode.brianwis.com';
 
 // Node API endpoints (no key)
 const NOW_PLAYING_PATH = process.env.NOW_PLAYING_PATH || '/now-playing';
 
 // Track endpoint (needs key in querystring)
 const TRACK_PATH = process.env.TRACK_PATH || '/track';
-const TRACK_KEY  = process.env.TRACK_KEY  || process.env.MOODE_API_KEY || 'REPLACEMEWITHKEY';
+const TRACK_KEY  = process.env.TRACK_KEY  || process.env.MOODE_API_KEY || '1029384756';
 
 const TRACK_TOKEN_PREFIX = 'moode-track';
 
@@ -44,13 +44,15 @@ function buildPlayDirectiveEnqueueNextFromNowPlaying(next, finishedToken) {
 
   var nextFile = String(next.file || '').trim();
 
-  var songposRaw = (next.songpos !== undefined && next.songpos !== null)
-    ? String(next.songpos).trim()
-    : '';
+  var songposRaw =
+    (next.songpos !== undefined && next.songpos !== null)
+      ? String(next.songpos).trim()
+      : '';
 
-  var nextPos0 = (songposRaw !== '' && isFinite(Number(songposRaw)))
-    ? Number(songposRaw)
-    : null;
+  var nextPos0 =
+    (songposRaw !== '' && isFinite(Number(songposRaw)))
+      ? Number(songposRaw)
+      : null;
 
   var expectedPreviousToken = String(finishedToken || '').trim();
 
@@ -61,14 +63,26 @@ function buildPlayDirectiveEnqueueNextFromNowPlaying(next, finishedToken) {
   var nextToken = makeToken({ file: nextFile, pos0: nextPos0 });
   var url = buildTrackUrlFromFile(nextFile, 0);
 
-  // Optional metadata (also old-runtime safe)
-  // Optional metadata (old-runtime safe)
-  // Prefer per-track art (stable), fall back to "current" only if needed
+  // Prefer per-track public HTTPS coverart (unique per file).
+  // Fall back to altArtUrl / aplArtUrl (current_320) / albumArtUrl.
+  var publicCover = '';
+  if (nextFile && nextFile.indexOf('://') < 0 && nextFile.toLowerCase() !== 'airplay active') {
+    publicCover = MOODE_API_BASE + '/coverart.php/' + strictEncodeURIComponent(nextFile);
+  }
+
   var artUrl =
-    (next && next.albumArtUrl && String(next.albumArtUrl).trim()) ? String(next.albumArtUrl).trim() :
-    (next && next.altArtUrl && String(next.altArtUrl).trim()) ? String(next.altArtUrl).trim() :
-    (next && next.aplArtUrl && String(next.aplArtUrl).trim()) ? String(next.aplArtUrl).trim() :
+    (publicCover) ? publicCover :
+    (next.altArtUrl && String(next.altArtUrl).trim()) ? String(next.altArtUrl).trim() :
+    (next.aplArtUrl && String(next.aplArtUrl).trim()) ? String(next.aplArtUrl).trim() :
+    (next.albumArtUrl && String(next.albumArtUrl).trim()) ? String(next.albumArtUrl).trim() :
     '';
+
+  // If we end up using the "current" image, add a lightweight cache-buster.
+  if (artUrl && artUrl.indexOf('/art/current_320.jpg') >= 0) {
+    var v = String((next.songid !== undefined && next.songid !== null) ? next.songid : nextPos0);
+    artUrl += (artUrl.indexOf('?') >= 0 ? '&' : '?') + 'v=' + strictEncodeURIComponent(v);
+  }
+
   var title = String(next.title || '').trim();
   var subtitle = '';
   if (next.artist) subtitle += String(next.artist);
@@ -81,7 +95,7 @@ function buildPlayDirectiveEnqueueNextFromNowPlaying(next, finishedToken) {
       url: url,
       offsetInMilliseconds: 0,
 
-      // ✅ ALSO set it here (some devices require it here even if top-level exists)
+      // Some devices require this here even if top-level exists
       expectedPreviousToken: expectedPreviousToken
     }
   };
@@ -96,7 +110,7 @@ function buildPlayDirectiveEnqueueNextFromNowPlaying(next, finishedToken) {
     }
   }
 
-  // ✅ Keep top-level too (covers the other interpretation)
+  // Keep top-level too (covers the other interpretation)
   return {
     type: 'AudioPlayer.Play',
     playBehavior: 'ENQUEUE',
@@ -281,12 +295,27 @@ function buildTrackUrlFromFile(file, offsetMs) {
 }
 
 function buildMetadataFromNowPlaying(d, fallbackTitle) {
-  // Prefer per-track art (stable), fall back to current_320 only if needed
+  // ✅ Best: per-track public HTTPS art URL via Caddy (unique per file)
+  var file = String((d && d.file) ? d.file : '').trim();
+
+  var publicCover = '';
+  if (file && file.indexOf('://') < 0 && file.toLowerCase() !== 'airplay active') {
+    publicCover = MOODE_API_BASE + '/coverart.php/' + strictEncodeURIComponent(file);
+  }
+
+  // Fallback order
   var artUrl =
-    (d && d.albumArtUrl && String(d.albumArtUrl).trim()) ? String(d.albumArtUrl).trim() :
+    (publicCover) ? publicCover :
     (d && d.altArtUrl && String(d.altArtUrl).trim()) ? String(d.altArtUrl).trim() :
     (d && d.aplArtUrl && String(d.aplArtUrl).trim()) ? String(d.aplArtUrl).trim() :
+    (d && d.albumArtUrl && String(d.albumArtUrl).trim()) ? String(d.albumArtUrl).trim() :
     '';
+
+  // OPTIONAL: if we fall back to the "current" image, add a cache-buster
+  if (artUrl && artUrl.indexOf('/art/current_320.jpg') >= 0) {
+    var v = String((d && d.songid) ? d.songid : (d && d.songpos) ? d.songpos : Date.now());
+    artUrl += (artUrl.indexOf('?') >= 0 ? '&' : '?') + 'v=' + strictEncodeURIComponent(v);
+  }
 
   var title = String((d && d.title) ? d.title : (fallbackTitle || 'Now Playing'));
 
