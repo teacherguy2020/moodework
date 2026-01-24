@@ -540,3 +540,4 @@ Troubleshooting (common)
 	•	Prefer per-track art URLs over “current/now-playing” art when possible
 
 IMG_6007.jpeg
+![Alt text](IMG_6007.jpeg)
