@@ -4,9 +4,11 @@
 # Copyright 2014 The moOde audio player project / Tim Curtis
 #
 # aplmeta.py
-# settle-window + fresh-cover + pid-aware + late-PID tolerant
+# settle-window + pid-aware + late-PID tolerant
 # + cover-write grace poll
 # + STICKY COVER ART (no downgrade within session)
+# + guards against duplicate/garbage Title events
+# + never falls back to default art if any cover file exists
 #
 
 import sys
@@ -18,7 +20,7 @@ import time
 import select
 from datetime import datetime
 
-PGM_VERSION = "1.8.4-settlewindow-stickycover"
+PGM_VERSION = "1.8.6-settlewindow-stickycover-titleguard"
 DEBUG = 0
 
 COVERS_LOCAL_ROOT = "/var/local/www/imagesw/airplay-covers/"
@@ -29,9 +31,7 @@ DEFAULT_COVER_WEB = "images/default-album-cover.png"
 # -------- Tuning knobs --------
 SETTLE_WINDOW_SEC = 1.3
 MAX_WAIT_FOR_ART_SEC = 1.0
-LATE_REFRESH_CUTOFF_SEC = 2.0
 TRACK_EPOCH_GRACE_SEC = 2.5
-LATE_PID_WINDOW_SEC = 3.0
 
 COVER_POLL_MAX_SEC = 1.2
 COVER_POLL_STEP_SEC = 0.10
@@ -47,7 +47,7 @@ picture_bytes = None
 
 track_epoch = 0.0
 
-# NEW: sticky cover state
+# Sticky cover state (session-level)
 have_cover_art = False
 
 # Pending emit
@@ -63,22 +63,34 @@ last_emit_ts = 0.0
 last_emit_pid = None
 last_emit_used_default = False
 
-last_emit_title = None
-last_emit_artist = None
-last_emit_album = None
-last_emit_duration = None
 
-
-def debug_msg(msg):
+def debug_msg(msg: str) -> None:
     if DEBUG:
         print(f"{datetime.now():%H:%M:%S} DEBUG: {msg}", flush=True)
 
 
-def safe_decode(b):
+def safe_decode(b: bytes) -> str:
     return b.decode("utf-8", errors="replace") if b else ""
 
 
-def get_metadata(line):
+def is_probably_garbage_text(s: str) -> bool:
+    if not s:
+        return True
+
+    # Control chars (except common whitespace) => garbage
+    for ch in s:
+        o = ord(ch)
+        if o < 32 and ch not in ("\t", "\n", "\r"):
+            return True
+
+    # Multiple replacement chars usually means decode junk
+    if s.count("�") >= 2:
+        return True
+
+    return False
+
+
+def get_metadata(line: str):
     for k in ("Title", "Artist", "Album Name"):
         m = re.match(rf'^{k}:\s*"(.*?)"\.$', line)
         if m:
@@ -99,16 +111,16 @@ def get_metadata(line):
     return None, None
 
 
-def cache_bust(url):
+def cache_bust(url: str) -> str:
     return f"{url}?v={persistent_id or '0x0'}"
 
 
-def newest_cover_path():
+def newest_cover_path() -> str:
     covers = glob.glob(os.path.join(COVERS_LOCAL_ROOT, "cover-*.jpg"))
     return max(covers, key=os.path.getmtime) if covers else ""
 
 
-def newest_cover_path_fresh():
+def newest_cover_path_fresh() -> str:
     p = newest_cover_path()
     if not p or track_epoch <= 0:
         return ""
@@ -120,42 +132,75 @@ def newest_cover_path_fresh():
     return ""
 
 
-def cover_url_from_path(p):
+def cover_url_from_path(p: str) -> str:
     return cache_bust(COVERS_WEB_ROOT + os.path.basename(p))
 
 
-def default_cover_url():
+def default_cover_url() -> str:
     return cache_bust(DEFAULT_COVER_WEB)
 
 
-def choose_cover_url():
+def last_emitted_cover_url() -> str:
+    if not last_emitted:
+        return ""
+    try:
+        return last_emitted.split("~~~")[4]
+    except Exception:
+        return ""
+
+
+def choose_cover_url() -> str:
+    """
+    Cover rules:
+      1) Prefer a *fresh* cover file.
+      2) If PictureBytes==0, treat it as "no new picture event" and prefer any existing cover.
+      3) If no fresh art (same-album reuse, no PictureBytes event), prefer any existing cover.
+      4) Sticky: if we ever had art in this session, don't downgrade.
+      5) Default as last resort.
+    """
     global have_cover_art
 
-    # If the source explicitly says "no picture", don't downgrade if we already have art.
-    if picture_bytes == 0:
-        if have_cover_art and last_emitted:
-            try:
-                return last_emitted.split("~~~")[4]
-            except Exception:
-                pass
-        return default_cover_url()
-
-    # Prefer a fresh cover file
+    # 1) Prefer fresh cover
     p = newest_cover_path_fresh()
     if p:
         have_cover_art = True
         return cover_url_from_path(p)
 
-    # Sticky: once we’ve had art, never downgrade to default during the session
-    if have_cover_art and last_emitted:
-        try:
-            return last_emitted.split("~~~")[4]
-        except Exception:
-            pass
+    # 2) Explicit "0 bytes" means no new picture event
+    if picture_bytes == 0:
+        p_any = newest_cover_path()
+        if p_any:
+            have_cover_art = True
+            return cover_url_from_path(p_any)
 
+        if have_cover_art:
+            c = last_emitted_cover_url()
+            if c:
+                return c
+
+        return default_cover_url()
+
+    # 3) Same-album: accept any existing cover even if not "fresh"
+    p_any = newest_cover_path()
+    if p_any:
+        have_cover_art = True
+        return cover_url_from_path(p_any)
+
+    # 4) Sticky fallback
+    if have_cover_art:
+        c = last_emitted_cover_url()
+        if c:
+            return c
+
+    # 5) Last resort
     return default_cover_url()
 
-def maybe_poll_for_fresh_cover():
+
+def maybe_poll_for_cover() -> str:
+    """
+    Grace poll for cover write. If nothing becomes "fresh", still prefer any
+    existing cover (same-album reuse) before default.
+    """
     global have_cover_art
 
     deadline = time.time() + COVER_POLL_MAX_SEC
@@ -166,19 +211,23 @@ def maybe_poll_for_fresh_cover():
             return cover_url_from_path(p)
         time.sleep(COVER_POLL_STEP_SEC)
 
+    p_any = newest_cover_path()
+    if p_any:
+        have_cover_art = True
+        return cover_url_from_path(p_any)
+
     return default_cover_url()
 
 
-def write_aplmeta_file(line):
+def write_aplmeta_file(line: str) -> None:
     os.makedirs(os.path.dirname(APLMETA_FILE), exist_ok=True)
-
     tmp = APLMETA_FILE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(line + "\n")
-
     os.replace(tmp, APLMETA_FILE)
-    
-def send_fe_update(metadata_line):
+
+
+def send_fe_update(metadata_line: str) -> None:
     try:
         subprocess.call(
             ["/var/www/util/send-fecmd.php", "update_aplmeta," + metadata_line],
@@ -188,25 +237,20 @@ def send_fe_update(metadata_line):
     except Exception as e:
         debug_msg(f"send-fe-update failed: {e}")
 
-def emit(reason, t, a, al, dur, cover):
-    global last_emitted, last_emit_ts, last_emit_pid
-    global last_emit_used_default
-    global last_emit_title, last_emit_artist, last_emit_album, last_emit_duration
+
+def emit(reason: str, t: str, a: str, al: str, dur: str, cover: str) -> None:
+    global last_emitted, last_emit_ts, last_emit_pid, last_emit_used_default
 
     payload = f"{t}~~~{a}~~~{al}~~~{dur}~~~{cover}~~~ALAC/AAC"
 
     if payload == last_emitted:
-        # AirPlay can reuse Persistent IDs across resumes / reconnects.
-        # If PID matches, allow re-emit so UI can refresh.
         if persistent_id and last_emit_pid == persistent_id:
             debug_msg(f"Emit({reason}) forcing re-emit for AirPlay PID reuse")
         else:
             debug_msg(f"Emit({reason}) deduped (unchanged)")
             return
 
-    debug_msg(
-        f"EMIT ({reason}) cover='{cover}' title='{t}' artist='{a}' album='{al}'"
-    )
+    debug_msg(f"EMIT ({reason}) cover='{cover}' title='{t}' artist='{a}' album='{al}'")
 
     write_aplmeta_file(payload)
     send_fe_update(payload)
@@ -216,30 +260,28 @@ def emit(reason, t, a, al, dur, cover):
     last_emit_pid = persistent_id
     last_emit_used_default = cover.startswith(DEFAULT_COVER_WEB)
 
-    last_emit_title = t
-    last_emit_artist = a
-    last_emit_album = al
-    last_emit_duration = dur
 
-def reset_track_state():
+def reset_track_state() -> None:
+    """
+    Reset per-track fields.
+    IMPORTANT: keep have_cover_art sticky across tracks.
+    """
     global artist, title, album, duration, picture_bytes
-    global pending, have_cover_art
+    global pending
 
     artist = title = album = None
     duration = "0"
     picture_bytes = None
     pending = False
-    have_cover_art = False
 
 
-def main():
+def main() -> None:
     global DEBUG
     global artist, title, album, duration
     global persistent_id, picture_bytes, track_epoch
     global pending, pending_start, pending_deadline, pending_pid, pending_title_at_start
     global have_cover_art
 
-    # ---- argv / debug ----
     if len(sys.argv) > 1:
         if sys.argv[1] == "--version":
             print("aplmeta.py version", PGM_VERSION)
@@ -252,7 +294,6 @@ def main():
     debug_msg("Entering while loop...")
 
     while True:
-        # Wake up in time to emit pending
         timeout = 0.25
         if pending:
             timeout = max(0.0, min(0.25, pending_deadline - time.time()))
@@ -264,10 +305,13 @@ def main():
             if pending and time.time() >= pending_deadline:
                 if title and (pending_pid is None or pending_pid == persistent_id):
                     cover = choose_cover_url()
-                    if cover.startswith(DEFAULT_COVER_WEB) and picture_bytes != 0:
-                        cover = maybe_poll_for_fresh_cover()
 
-                    # 🔒 LOCK STICKY COVER IF NON-DEFAULT
+                    # If default and we didn't explicitly receive "0 bytes",
+                    # give a short grace poll for the cover write to land.
+                    if cover.startswith(DEFAULT_COVER_WEB) and picture_bytes != 0:
+                        cover = maybe_poll_for_cover()
+
+                    # Lock sticky cover if non-default
                     if cover and not cover.startswith(DEFAULT_COVER_WEB):
                         have_cover_art = True
 
@@ -330,7 +374,7 @@ def main():
             ):
                 cover = choose_cover_url()
                 if not cover.startswith(DEFAULT_COVER_WEB):
-                    have_cover_art = True  # 🔒 LOCK
+                    have_cover_art = True
                     emit(
                         "late-art",
                         title,
@@ -345,9 +389,7 @@ def main():
                 now = time.time()
                 hard_cap = pending_start + MAX_WAIT_FOR_ART_SEC
                 if now < hard_cap:
-                    pending_deadline = min(
-                        hard_cap, max(pending_deadline, now + 0.35)
-                    )
+                    pending_deadline = min(hard_cap, max(pending_deadline, now + 0.35))
                     debug_msg(f"Extended settle deadline -> {pending_deadline:.3f}")
 
             continue
@@ -367,10 +409,17 @@ def main():
 
         # ---- Title triggers settle window ----
         if key == "Title":
-            title = val
+            if is_probably_garbage_text(val):
+                debug_msg(f"Ignoring garbage Title: {repr(val)}")
+                continue
 
-            if track_epoch <= 0:
-                track_epoch = time.time()
+            # Ignore immediate repeats while pending (shairport can duplicate Title)
+            if pending and title and val.strip() == title.strip():
+                debug_msg("Ignoring duplicate Title during pending window")
+                continue
+
+            title = val
+            track_epoch = time.time()
 
             pending = True
             pending_pid = persistent_id
