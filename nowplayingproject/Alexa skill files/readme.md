@@ -1,16 +1,36 @@
-# Alexa Skill + AWS Lambda (moOde Now Playing)
+# Alexa Skill + AWS Lambda  
+## moOde Now Playing
 
-This README describes how to build the **Alexa Skill** and deploy the **AWS Lambda** that powers it.
+This README describes how to build the **Alexa Skill** and deploy the **AWS Lambda** that powers **moOde Now Playing**.
 
-The Skill:
-- Plays the current moOde track on Echo devices (AudioPlayer)
-- Answers “what’s playing?”
-- Supports pause / resume / next
-- Uses AudioPlayer lifecycle events to keep MPD’s queue aligned via your Node API
+The skill allows Alexa devices (Echo, Echo Show, etc.) to:
 
-Your public API base should look like:
+- Play music from a moOde / MPD queue
+- Answer “what’s playing?”
+- Support pause / resume / next
+- Maintain **gapless playback**
+- Stay correctly aligned with MPD’s queue using AudioPlayer lifecycle events
 
-https://moode.YOURDOMAINNAME.com
+—
+
+## 🧠 Core Design Principle (Read This First)
+
+**MPD (via moOde) is the single authority for playback order.**
+
+The Lambda **never predicts or calculates** what song should play next.
+
+Instead, it relies on this invariant:
+
+> **After each queue advance + prime, `GET /now-playing` always represents  
+> the next correct track to play.**
+
+As a result:
+- Sequential playback works
+- Shuffle works automatically
+- No queue-slot math is required
+- Drift and skipped tracks are eliminated
+
+Alexa **follows MPD** — not the other way around.
 
 —
 
@@ -28,65 +48,91 @@ Alexa frequently mishears or ambiguously interprets:
 - “mood”
 - “mute”
 
-As a result:
-- Alexa may fail to launch the skill
-- Alexa may interpret commands as system actions instead of a skill
-- Invocation reliability becomes inconsistent
+This can cause:
+- Skill launch failures
+- Alexa triggering system actions instead of your skill
+- Inconsistent behavior
 
 ### ✅ Recommended invocation name
 
-Use something phonetically clear and stable:
+Use something phonetically clear:
 
 mood audio
-
-This works well because:
-- It’s easy to pronounce
-- It’s two common words Alexa already recognizes
-- It avoids collisions with system commands
 
 ### Example usage
 
 Correct:
-
-Alexa, open mood audio
-Alexa, ask mood audio what’s playing
-Alexa, tell mood audio to play
+- “Alexa, open mood audio”
+- “Alexa, ask mood audio what’s playing”
+- “Alexa, tell mood audio to play”
 
 Avoid:
-
-Alexa, open moode
-Alexa, ask moode what’s playing
+- “Alexa, open moode”
+- “Alexa, ask moode what’s playing”
 
 —
 
 ## 1) Prerequisites
 
 ### Required infrastructure
-- **Node API (Pi #2)** reachable over the internet via **HTTPS**
-  - Must expose endpoints like:
-    - `GET /now-playing` (no key)
-    - `GET /track?file=...&k=...` (key required)
-    - `POST /queue/advance?k=...&pos0=...` (key required)
+
+- **moOde Audio Player (Pi #1)**
+  - Hosts MPD
+  - Maintains the authoritative queue
+
+- **Node API (Pi #2)**  
+  Publicly reachable over **HTTPS**, exposing:
+
+  - `GET /now-playing`  
+    - No key required  
+    - Returns the *next* track MPD intends to play
+
+  - `GET /track?file=...&k=...`  
+    - Streams audio (FLAC, etc.)
+    - Must be HTTPS with a valid certificate
+
+  - `POST /queue/advance?k=...&pos0=...`  
+    - Removes the current queue head
+    - Primes MPD so `/now-playing` advances
+
+Your public API base should look like:
+
+https://moode.YOURDOMAINNAME.com
+
+—
 
 ### AWS / Alexa accounts
+
 - Amazon Developer account (Alexa Skills)
-- AWS account (Lambda)
+- AWS account (Lambda + CloudWatch)
+
+—
 
 ### Why HTTPS matters
-Echo devices require the audio stream URL to be **HTTPS** with a valid certificate.  
-Your `/track` endpoint must be publicly reachable and fast.
+
+Echo devices **require**:
+- HTTPS audio URLs
+- Valid certificates
+- Public reachability
+
+Your `/track` endpoint must be:
+- Fast
+- Reliable
+- TLS-valid
 
 —
 
 ## 2) Create the Alexa Skill
 
 ### A) Create a new skill
-1. Go to **Alexa Developer Console** → **Create Skill**
-2. **Skill name:** `moOde Now Playing` (name is cosmetic)
-3. **Default language:** your choice
-4. **Type:** `Custom`
-5. **Hosting:** `Provision your own`
-6. **Template:** `Start from scratch`
+
+1. Go to **Alexa Developer Console**
+2. Click **Create Skill**
+3. **Skill name:** `moOde Now Playing` (cosmetic)
+4. **Default language:** your choice
+5. **Type:** `Custom`
+6. **Hosting:** `Provision your own`
+7. **Template:** `Start from scratch`
 
 —
 
@@ -94,11 +140,9 @@ Your `/track` endpoint must be publicly reachable and fast.
 
 In **Build → Invocation**:
 
-Set:
-
 mood audio
 
-Alexa will confirm if it’s valid.
+Alexa will confirm validity.
 
 —
 
@@ -107,22 +151,25 @@ Alexa will confirm if it’s valid.
 In **Interfaces**:
 - ✅ **Audio Player**
 
-Required for streaming audio and playback events.
+Required for:
+- Streaming audio
+- Playback lifecycle events
 
 —
 
-### D) Enable APL (optional, recommended)
+### D) Enable APL (optional but recommended)
 
 In **Interfaces**:
 - ✅ **Alexa Presentation Language (APL)**
 
-Not required for audio playback, but useful for Echo Show devices.
+Useful for Echo Show metadata display.
 
 —
 
-## 3) Define the Interaction Model (Intents)
+## 3) Define the Interaction Model
 
 ### Built-in intents
+
 Add:
 - `AMAZON.PauseIntent`
 - `AMAZON.ResumeIntent`
@@ -133,10 +180,9 @@ Add:
 
 —
 
-### Custom intent: NowPlayingIntent
+### Custom intent: `NowPlayingIntent`
 
-Create:
-- **Name:** `NowPlayingIntent`
+**Name:** `NowPlayingIntent`
 
 Sample utterances:
 - `what’s playing`
@@ -148,20 +194,21 @@ Sample utterances:
 
 ### Launch behavior
 
-Your Lambda handles `LaunchRequest`, so users can say:
+The Lambda handles `LaunchRequest`, so users can say:
 
-Alexa, open mood audio
-Alexa, launch mood audio
+- “Alexa, open mood audio”
+- “Alexa, launch mood audio”
 
 —
 
-## 4) Configure the Skill Endpoint (Lambda ARN)
+## 4) Configure the Skill Endpoint
 
-After creating Lambda:
-1. **Build → Endpoint**
-2. Choose **AWS Lambda ARN**
+After creating the Lambda:
+
+1. Go to **Build → Endpoint**
+2. Select **AWS Lambda ARN**
 3. Paste the ARN
-4. Select the correct region
+4. Choose the correct region
 5. Save
 
 —
@@ -169,29 +216,31 @@ After creating Lambda:
 ## 5) Create the AWS Lambda Function
 
 ### A) Create function
-- Runtime: **Node.js (18+)**
+
+- Runtime: **Node.js 16+**
 - Timeout: **6–10 seconds**
 - Memory: **128–256 MB**
 
 —
 
 ### B) Deploy code
+
 Upload your Lambda code (and `node_modules` if needed).
 
 Dependencies:
 - `ask-sdk-core`
-- Node standard libs
+- Node standard libraries (`https`, etc.)
 
 —
 
 ### C) Environment variables
 
-Required:
+**Required**
 
 MOODE_API_BASE=https://moode.YOURDOMAINNAME.com
 TRACK_KEY=your_shared_secret
 
-Optional:
+**Optional**
 
 NOW_PLAYING_PATH=/now-playing
 TRACK_PATH=/track
@@ -202,70 +251,132 @@ NEXT_ENQUEUE_GAP_MS=5000
 —
 
 ### D) Add Alexa Skills Kit trigger
+
 Lambda → **Triggers** → Add **Alexa Skills Kit**
 
 —
 
-## 6) Playback Flow (Mental Model)
+## 6) Playback Flow (Authoritative Model)
 
-- **LaunchRequest**
-  - Lambda queries `/now-playing`
-  - Sends `AudioPlayer.Play (REPLACE_ALL)`
+### 1) Skill launch
 
-- **PlaybackStarted**
-  - Lambda calls `/queue/advance`
-  - MPD stays aligned with Alexa
-
-- **PlaybackNearlyFinished**
-  - Lambda enqueues next track
-  - Gapless playback
+- Lambda calls `GET /now-playing`
+- Issues `AudioPlayer.Play (REPLACE_ALL)`
+- Alexa begins playback
 
 —
 
-## 7) Testing
+### 2) PlaybackStarted
+
+- Lambda calls `POST /queue/advance`
+- MPD deletes the head of the queue
+- MPD primes itself
+- `/now-playing` now reflects the *next* track
+
+—
+
+### 3) PlaybackNearlyFinished
+
+- Lambda calls `GET /now-playing`
+- Builds `AudioPlayer.Play (ENQUEUE)` using that track
+- (Recommended) Lambda immediately advances + primes MPD again  
+  so `/now-playing` stays accurate for the next cycle
+
+—
+
+### 4) PlaybackFinished
+
+- If an ENQUEUE was already issued: **no action**
+- Playback continues seamlessly
+
+—
+
+### Key invariant
+
+> At all times, the next track to enqueue is whatever  
+> `/now-playing` reports **after** the most recent advance.
+
+Lambda never reasons about:
+- Queue slots
+- Index math
+- Shuffle order
+
+—
+
+## 7) Shuffle / Random Playback
+
+Shuffle is **fully supported**.
+
+When shuffle is enabled in moOde / MPD:
+- MPD chooses the next track internally
+- `/now-playing` reflects MPD’s choice
+- Lambda enqueues exactly that
+
+No Lambda changes are required.
+
+**Important:**  
+MPD must remain the system choosing order.  
+Lambda must never attempt to reorder or predict.
+
+—
+
+## 8) Testing
 
 ### Voice tests
 
-Alexa, open mood audio
-Alexa, ask mood audio what’s playing
-Alexa, tell mood audio next
-Alexa, pause
-Alexa, resume
+- “Alexa, open mood audio”
+- “Alexa, ask mood audio what’s playing”
+- “Alexa, next”
+- “Alexa, pause”
+- “Alexa, resume”
+
+—
 
 ### Logs
+
 Check **CloudWatch Logs** for:
-- AudioPlayer events
+- AudioPlayer lifecycle events
 - `/now-playing` payloads
-- enqueue / advance activity
+- queue advance + enqueue activity
+
+Clean logs should show:
+- One advance per track start
+- One enqueue per NearlyFinished
+- No duplicate advances
 
 —
 
-## 8) Common pitfalls
+## 9) Common Pitfalls
 
-### Invocation fails or launches the wrong thing
-- Ensure invocation name is **mood audio**
-- Avoid “moode”, “mode”, or “mute”
-
-### No audio
+### Skill launches but no audio
 - `/track` must be HTTPS
 - Certificate must be valid
-- Endpoint must be reachable from the internet
+- `TRACK_KEY` must be set
 
 —
 
-## 9) Quick checklist
+### Invocation launches the wrong thing
+- Invocation name must be **mood audio**
+- Avoid “moode”, “mode”, “mute”
+
+—
+
+### Skipped or repeated tracks
+- Ensure MPD advance + prime is happening
+- Ensure `/now-playing` reflects the next track
+- Lambda should never calculate “next” itself
+
+—
+
+## 10) Quick Checklist
 
 - [ ] Skill name set (cosmetic)
 - [ ] Invocation name = **mood audio**
 - [ ] AudioPlayer enabled
 - [ ] Lambda deployed
-- [ ] Env vars set
+- [ ] Environment variables set
 - [ ] HTTPS working for `/track`
 - [ ] CloudWatch logs clean
+- [ ] Shuffle tested (optional)
 
 —
-
-If you want, next we can:
-	•	add a short “Why Alexa is the queue master” section
-	•	document token structure for debugging
-	•	or add a troubleshooting flowchart for enqueue/advance issues
