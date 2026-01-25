@@ -484,12 +484,3 @@ Skipped or repeated tracks
 	•	CloudWatch logs clean
 	•	Shuffle tested (optional)
 
-⸻
-
-If you want next, we can add:
-	•	Token structure documentation (for debugging)
-	•	Sequence diagrams (Launch → NearlyFinished → Enqueue)
-	•	A troubleshooting decision tree
-	•	Or extract this into a public GitHub README + blog post
-
-This is very solid work.
