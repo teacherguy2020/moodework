@@ -1,3 +1,4 @@
+(ChatGPT assisted)
 Alexa Skill + AWS Lambda (relies upon established “now-playing” project)
 
 moOde Now Playing
