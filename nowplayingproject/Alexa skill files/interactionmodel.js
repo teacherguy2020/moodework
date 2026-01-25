@@ -20,22 +20,6 @@
                     "samples": []
                 },
                 {
-                    "name": "AMAZON.PauseIntent",
-                    "samples": []
-                },
-                {
-                    "name": "AMAZON.ResumeIntent",
-                    "samples": []
-                },
-                {
-                    "name": "AMAZON.PlayIntent",
-                    "samples": []
-                },
-                {
-                    "name": "AMAZON.NextIntent",
-                    "samples": []
-                },
-                {
                     "name": "NowPlayingIntent",
                     "slots": [],
                     "samples": [
@@ -89,6 +73,14 @@
                         "play my playlist {playlist}",
                         "start my playlist {playlist}"
                     ]
+                },
+                {
+                    "name": "AMAZON.PauseIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.ResumeIntent",
+                    "samples": []
                 }
             ],
             "types": []
