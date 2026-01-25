@@ -8,7 +8,7 @@ The skill allows Alexa devices (Echo, Echo Show, etc.) to:
 - Play music from a moOde / MPD queue
 - Answer “what’s playing?”
 - Support pause / resume / next
-- Maintain **gapless playback**
+- Maintain **continuous playback**
 - Stay correctly aligned with MPD’s queue using AudioPlayer lifecycle events
 
 —
@@ -17,16 +17,12 @@ The skill allows Alexa devices (Echo, Echo Show, etc.) to:
 
 **MPD (via moOde) is the single authority for playback order.**
 
-The Lambda **never predicts or calculates** what song should play next.
-
-Instead, it relies on this invariant:
-
 > **After each queue advance + prime, `GET /now-playing` always represents  
 > the next correct track to play.**
 
 As a result:
 - Sequential playback works
-- Shuffle works automatically
+- Shuffle is respected
 - No queue-slot math is required
 - Drift and skipped tracks are eliminated
 
@@ -38,7 +34,7 @@ Alexa **follows MPD** — not the other way around.
 
 **Do not use “moode” as the invocation name.**
 
-While it’s fine to name the skill *moOde Now Playing*, the **invocation name** should **not** be “moode”.
+While it’s fine to name the skill *moOde*, the **invocation name** should **not** be “moode”.
 
 ### Why this matters
 
@@ -62,13 +58,9 @@ mood audio
 ### Example usage
 
 Correct:
-- “Alexa, open mood audio”
-- “Alexa, ask mood audio what’s playing”
-- “Alexa, tell mood audio to play”
-
-Avoid:
-- “Alexa, open moode”
-- “Alexa, ask moode what’s playing”
+- “Alexa, open mood audio skill”
+- “Alexa, ask mood audio skill what’s playing”
+- “Alexa, tell mood audio skill to play”
 
 —
 
@@ -128,7 +120,7 @@ Your `/track` endpoint must be:
 
 1. Go to **Alexa Developer Console**
 2. Click **Create Skill**
-3. **Skill name:** `moOde Now Playing` (cosmetic)
+3. **Skill name:** `moOde` (cosmetic)
 4. **Default language:** your choice
 5. **Type:** `Custom`
 6. **Hosting:** `Provision your own`
@@ -324,8 +316,8 @@ Lambda must never attempt to reorder or predict.
 
 ### Voice tests
 
-- “Alexa, open mood audio”
-- “Alexa, ask mood audio what’s playing”
+- “Alexa, open mood audio skill”
+- “Alexa, ask mood audio skill what’s playing”
 - “Alexa, next”
 - “Alexa, pause”
 - “Alexa, resume”
