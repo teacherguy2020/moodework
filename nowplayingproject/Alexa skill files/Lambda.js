@@ -1,185 +1,174 @@
 'use strict';
 
-/**
- * moOde Alexa AudioPlayer Lambda (Node.js 16)
- *
- * Key design points:
- *  - Track tokens are base64url(JSON) with { file, pos0 } (pos0 is 0-based MPD playlist position)
- *  - PlaybackStarted advances MPD queue ONCE (idempotent) via POST /queue/advance
- *  - PlaybackNearlyFinished ENQUEUEs next track using GET /next-up (authoritative)
- *  - PlaybackFinished does NOTHING if we recently ENQUEUE'd for that finished token
- *    (prevents REPLACE_ALL from nuking the enqueued stream)
- *  - All artwork URLs in directives are PUBLIC (never IP address)
- *
- * Env:
- *  MOODE_API_BASE=https://moode.REPLACEWITHYOURPUBLICDOMAIN.com
- *  NOW_PLAYING_PATH=/now-playing
- *  NEXT_UP_PATH=/next-up
- *  TRACK_PATH=/track
- *  QUEUE_ADVANCE_PATH=/queue/advance
- *  TRACK_KEY=...
- */
-
-const Alexa = require('ask-sdk-core');
-const https = require('https');
-const { URL } = require('url');
-
-console.log('*** BOOT ***', new Date().toISOString(), 'version=', process.env.AWS_LAMBDA_FUNCTION_VERSION);
-
 /* =========================
  * Config
  * ========================= */
 
-const MOODE_API_BASE = process.env.MOODE_API_BASE || 'https://moode.REPLACEWITHYOURPUBLICDOMAIN.com';
+const Alexa = require('ask-sdk-core');
+const http = require('http');
+const https = require('https');
+const { URL } = require('url');
 
-const NOW_PLAYING_PATH = process.env.NOW_PLAYING_PATH || '/now-playing';
-const NEXT_UP_PATH     = process.env.NEXT_UP_PATH     || '/next-up';
+const VERSION = 1; // bump when you deploy
+const API_BASE = String(process.env.API_BASE || 'https://moode.brianwis.com').replace(/\/+$/, '');
+const TRACK_KEY = String(process.env.TRACK_KEY || '1029384756').trim();
+const PUBLIC_TRACK_BASE = String(process.env.PUBLIC_TRACK_BASE || API_BASE).replace(/\/+$/, ''); // usually same as API_BASE
 
-const TRACK_PATH       = process.env.TRACK_PATH       || '/track';
-const QUEUE_ADVANCE_PATH = process.env.QUEUE_ADVANCE_PATH || '/queue/advance';
+// Tuneables
+const HTTP_TIMEOUT_MS = 6000;
 
-// Shared key (querystring) required by /track and /queue/advance
-const TRACK_KEY = process.env.TRACK_KEY || process.env.MOODE_API_KEY || 'REPLACEWITHYOURCUSTOMTRACKKEY';
-
-const META_STABLE_GAP_MS  = Number(process.env.META_STABLE_GAP_MS || '250');
-const NEXT_ENQUEUE_GAP_MS = Number(process.env.NEXT_ENQUEUE_GAP_MS || '5000');
-
-const TOKEN_PREFIX = 'moode-track';
-
-// Dedup / idempotency
-let lastKnownToken = '';
-let lastKnownOffsetMs = 0;
-
-let lastAdvancedToken = '';
-let lastAdvancedAt = 0;
-
-let lastEnqueuedToken = '';
-let lastEnqueueAt = 0;
-
-// Critical: used to suppress PlaybackFinished fallback when we ENQUEUE
-let lastEnqueuePrevToken = '';
-let lastEnqueuePrevAt = 0;
+// Dedupe / idempotency windows
+const ADVANCE_GUARD_MS = 8000;       // avoid double-advancing same token
+const ENQUEUE_GUARD_MS = 5000;       // avoid duplicate ENQUEUE spam
+const PRIME_START_OFFSET_MS = 0;     // no resume yet
 
 /* =========================
  * Small utils
  * ========================= */
 
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
+function nowMs() { return Date.now(); }
+
+function safeStr(x) {
+  return String(x === undefined || x === null ? '' : x).trim();
 }
 
-function strictEncodeURIComponent(s) {
-  return encodeURIComponent(String(s))
-    .replace(/[!'()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+function safeNum(x, fallback) {
+  const n = Number.parseInt(String(x === undefined || x === null ? '' : x).trim(), 10);
+  return Number.isFinite(n) ? n : fallback;
 }
 
-function base64UrlEncode(str) {
-  return Buffer.from(String(str || ''), 'utf8')
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/g, '');
+function decodeHtmlEntities(str) {
+  const s = safeStr(str);
+  return s
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>');
 }
 
-function base64UrlDecode(b64u) {
-  const s = String(b64u || '').replace(/-/g, '+').replace(/_/g, '/');
-  const pad = (s.length % 4) ? '='.repeat(4 - (s.length % 4)) : '';
-  return Buffer.from(s + pad, 'base64').toString('utf8');
-}
-
-function makeToken(obj) {
-  return TOKEN_PREFIX + ':' + base64UrlEncode(JSON.stringify(obj || {}));
-}
-
-function parseToken(token) {
+function b64ToJson(b64) {
   try {
-    const t = String(token || '').trim();
-    const prefix = TOKEN_PREFIX + ':';
-    if (!t.startsWith(prefix)) return null;
-    const json = base64UrlDecode(t.slice(prefix.length));
-    return JSON.parse(json);
+    const txt = Buffer.from(b64, 'base64').toString('utf8');
+    return JSON.parse(txt);
   } catch (e) {
     return null;
   }
 }
 
-function decodeHtmlEntities(s) {
-  if (!s) return '';
-  return String(s)
-    .replace(/&amp;/gi, '&')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
-    .replace(/&apos;/gi, "'")
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .trim();
+function parseTokenB64(token) {
+  // token format: "moode-track:<base64json>"
+  const s = safeStr(token);
+  const i = s.indexOf(':');
+  if (i < 0) return null;
+  const b64 = s.slice(i + 1);
+  const obj = b64ToJson(b64);
+  return obj && typeof obj === 'object' ? obj : null;
 }
 
-function absolutizeMaybe(url) {
-  if (!url) return '';
-  const s = String(url).trim();
-  if (!s) return '';
-  if (s.startsWith('https://') || s.startsWith('http://')) return s;
-  if (s.startsWith('/')) return MOODE_API_BASE + s;
-  return '';
+function makeToken(obj) {
+  const payload = JSON.stringify(obj || {});
+  const b64 = Buffer.from(payload, 'utf8').toString('base64');
+  return 'moode-track:' + b64;
 }
 
-function mustHaveEnv() {
-  const missing = [];
-  if (!MOODE_API_BASE) missing.push('MOODE_API_BASE');
-  if (!TRACK_PATH) missing.push('TRACK_PATH');
-  if (!TRACK_KEY) missing.push('TRACK_KEY');
-  if (missing.length) {
-    const err = new Error('Lambda misconfigured: missing env var(s): ' + missing.join(', '));
-    err.code = 'CONFIG';
-    throw err;
+function absolutizeMaybe(urlStr) {
+  const s = safeStr(urlStr);
+  if (!s) return '';
+  if (/^https?:\/\//i.test(s)) return s;
+  if (s.startsWith('/')) return API_BASE + s;
+  return API_BASE + '/' + s;
+}
+
+function getEventType(handlerInput) {
+  const req = handlerInput.requestEnvelope && handlerInput.requestEnvelope.request;
+  return req && req.type ? String(req.type) : '';
+}
+
+function getAudioPlayerToken(handlerInput) {
+  const req = handlerInput.requestEnvelope && handlerInput.requestEnvelope.request;
+  // AudioPlayer events usually put token here
+  if (req && req.token) return String(req.token);
+  // Some paths might keep it in context
+  try {
+    const t = handlerInput.requestEnvelope.context.AudioPlayer.token;
+    return t ? String(t) : '';
+  } catch (e) {
+    return '';
   }
+}
+
+function speak(handlerInput, text) {
+  return handlerInput.responseBuilder
+    .speak(text)
+    .withShouldEndSession(false)
+    .getResponse();
 }
 
 /* =========================
  * HTTPS helper
  * ========================= */
 
-function httpsJson(opts) {
+function httpRequestJson(method, urlStr, opts) {
+  opts = opts || {};
+  const headers = opts.headers || {};
+  const bodyObj = opts.bodyObj || null;
+  const timeoutMs = opts.timeoutMs || HTTP_TIMEOUT_MS;
+
   return new Promise((resolve, reject) => {
-    let parsed;
-    try {
-      parsed = new URL(opts.url);
-    } catch (e) {
-      return reject(new Error('Bad URL: ' + opts.url));
-    }
+    const u = new URL(urlStr);
+    const lib = u.protocol === 'https:' ? https : http;
 
-    const reqOpts = {
-      method: opts.method || 'GET',
-      hostname: parsed.hostname,
-      port: parsed.port || 443,
-      path: parsed.pathname + (parsed.search || ''),
-      headers: Object.assign({}, opts.headers || {}),
-      family: 4,
-    };
+    const body = bodyObj ? Buffer.from(JSON.stringify(bodyObj), 'utf8') : null;
 
-    const req = https.request(reqOpts, (res) => {
-      let data = '';
-      res.setEncoding('utf8');
-      res.on('data', (c) => (data += c));
-      res.on('end', () => {
-        const status = res.statusCode || 0;
-        if (status < 200 || status >= 400) {
-          return reject(new Error('HTTP ' + status + ' from ' + opts.url + ': ' + data.slice(0, 300)));
-        }
-        if (!data) return resolve({});
-        try {
-          resolve(JSON.parse(data));
-        } catch (e) {
-          // Not JSON -- return raw for debugging, but do NOT throw
-          resolve({ raw: data });
-        }
-      });
+    const req = lib.request(
+      {
+        protocol: u.protocol,
+        hostname: u.hostname,
+        port: u.port || (u.protocol === 'https:' ? 443 : 80),
+        path: u.pathname + u.search,
+        method: method,
+        headers: Object.assign(
+          {
+            'Accept': 'application/json',
+          },
+          body ? { 'Content-Type': 'application/json', 'Content-Length': body.length } : {},
+          headers
+        ),
+        timeout: timeoutMs,
+      },
+      (res) => {
+        let data = '';
+        res.setEncoding('utf8');
+
+        res.on('data', (chunk) => { data += chunk; });
+        res.on('end', () => {
+          const status = res.statusCode || 0;
+          const ok = status >= 200 && status < 300;
+
+          if (!ok) {
+            return reject(new Error('HTTP ' + status + ' ' + method + ' ' + urlStr + ': ' + String(data).slice(0, 200)));
+          }
+
+          const t = String(data || '').trim();
+          if (!t) return resolve(null);
+
+          try {
+            resolve(JSON.parse(t));
+          } catch (e) {
+            reject(new Error('Bad JSON from ' + urlStr + ': ' + e.message + '. Body: ' + t.slice(0, 200)));
+          }
+        });
+      }
+    );
+
+    req.on('timeout', () => {
+      try { req.destroy(new Error('timeout')); } catch (e) {}
     });
 
-    req.on('error', reject);
-    req.setTimeout(opts.timeoutMs || 6000, () => req.destroy(new Error('Request timeout')));
-    if (opts.body) req.write(JSON.stringify(opts.body));
+    req.on('error', (err) => reject(err));
+
+    if (body) req.write(body);
     req.end();
   });
 }
@@ -188,39 +177,18 @@ function httpsJson(opts) {
  * API calls
  * ========================= */
 
-function getNowPlaying() {
-  mustHaveEnv();
-  return httpsJson({
-    method: 'GET',
-    url: MOODE_API_BASE + NOW_PLAYING_PATH,
-    headers: { Accept: 'application/json' },
-    timeoutMs: 3500,
-  });
+async function apiNowPlaying() {
+  const url = API_BASE + '/now-playing';
+  return httpRequestJson('GET', url, { timeoutMs: HTTP_TIMEOUT_MS });
 }
 
-function getNextUp() {
-  mustHaveEnv();
-  return httpsJson({
-    method: 'GET',
-    url: MOODE_API_BASE + NEXT_UP_PATH,
-    headers: { Accept: 'application/json' },
-    timeoutMs: 3500,
-  });
-}
-
-function queueAdvance(pos0, file) {
-  mustHaveEnv();
-
-  const p = Number(pos0);
-  const qsPos0 = isFinite(p) ? `&pos0=${encodeURIComponent(String(p))}` : '';
-  const qsFile = file ? `&file=${encodeURIComponent(String(file))}` : '';
-
-  return httpsJson({
-    method: 'POST',
-    url: MOODE_API_BASE + QUEUE_ADVANCE_PATH + '?k=' + strictEncodeURIComponent(TRACK_KEY) + qsPos0 + qsFile,
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-    body: { pos0: p, file: file || '' },
-    timeoutMs: 3500,
+async function apiQueueAdvance(pos0, file) {
+  const url = API_BASE + '/queue/advance';
+  const headers = TRACK_KEY ? { 'x-track-key': TRACK_KEY } : {};
+  return httpRequestJson('POST', url, {
+    headers: headers,
+    bodyObj: { pos0: pos0, file: file },
+    timeoutMs: HTTP_TIMEOUT_MS,
   });
 }
 
@@ -228,231 +196,171 @@ function queueAdvance(pos0, file) {
  * Alexa helpers
  * ========================= */
 
-function getCurrentTokenBestEffort(handlerInput) {
-  const req = handlerInput.requestEnvelope.request || {};
-  if (typeof req.token === 'string' && req.token.trim()) return req.token.trim();
+function buildPlayReplaceAll(track, spokenTitle) {
+  // track fields from /now-playing:
+  // { file, title, artist, album, albumArtUrl?, ... , songpos, ... }
+  const file = safeStr(track.file);
+  const pos0 = safeNum(track.songpos, 0);
 
-  const ctx = handlerInput.requestEnvelope.context || {};
-  const ap = ctx.AudioPlayer || {};
-  if (typeof ap.token === 'string' && ap.token.trim()) return ap.token.trim();
+  const token = makeToken({ file: file, pos0: pos0 });
 
-  return '';
-}
+  const title = safeStr(track.title);
+  const artist = safeStr(track.artist);
+  const album = safeStr(track.album);
+  const artUrl = absolutizeMaybe(track.albumArtUrl || track.altArtUrl || '');
 
-function buildTrackUrlFromFile(file, offsetMs) {
-  if (!file) return '';
-  const encFile = strictEncodeURIComponent(file);
-  const encKey  = strictEncodeURIComponent(TRACK_KEY);
+  const url =
+    PUBLIC_TRACK_BASE +
+    '/track?file=' + encodeURIComponent(file) +
+    (TRACK_KEY ? '&k=' + encodeURIComponent(TRACK_KEY) : '');
 
-  const ms = Number(offsetMs || 0);
-  const sec = ms > 0 ? Math.floor(ms / 1000) : 0;
-
-  let url = MOODE_API_BASE + TRACK_PATH + '?file=' + encFile + '&k=' + encKey;
-  if (sec > 0) url += '&t=' + String(sec);
-  return url;
-}
-
-/**
- * Always produce PUBLIC artwork URLs.
- * - Prefer already-public altArtUrl / aplArtUrl if present
- * - Otherwise build https://public/coverart.php/<mpdFile> for file playback
- */
-function pickPublicArtUrl(d, mpdFile) {
-  const cand = [
-    d && d.altArtUrl,
-    d && d.aplArtUrl,
-    d && d.albumArtUrl, // may be LAN -- we will reject if it looks LAN
-  ]
-    .map((x) => absolutizeMaybe(x))
-    .filter(Boolean);
-
-  for (const u of cand) {
-    // reject common LAN patterns
-    if (u.startsWith('http://10.') || u.startsWith('http://192.168.') || u.startsWith('http://172.16.')) continue;
-    return u;
-  }
-
-  if (mpdFile) {
-    // Your server supports PUBLIC /coverart.php/<file> (per your /next-up artUrl)
-    return MOODE_API_BASE + '/coverart.php/' + strictEncodeURIComponent(mpdFile);
-  }
-
-  return '';
-}
-
-function buildMetadataFromNowPlaying(d, fallbackTitle) {
-  const title = String((d && d.title) ? d.title : (fallbackTitle || 'Now Playing'));
-  let subtitle = '';
-  if (d && d.artist) subtitle += String(d.artist);
-  if (d && d.album) subtitle += (subtitle ? ' -- ' : '') + String(d.album);
-  subtitle = subtitle || 'moOde';
-
-  const meta = { title, subtitle };
-
-  const artUrl = pickPublicArtUrl(d, d && d.file ? String(d.file).trim() : '');
-  if (artUrl) {
-    meta.art = { sources: [{ url: artUrl }] };
-    meta.backgroundImage = { sources: [{ url: artUrl }] };
-  }
-
-  return meta;
-}
-
-function buildPlayReplaceAllFromNowPlaying(d, offsetMs) {
-  const mpdFile = String((d && d.file) ? d.file : '').trim();
-  if (!mpdFile) return null;
-
-  const pos0raw = (d && d.songpos !== undefined && d.songpos !== null) ? String(d.songpos).trim() : '';
-  const pos0 = (pos0raw !== '' && isFinite(Number(pos0raw))) ? Number(pos0raw) : null;
-
-  const url = buildTrackUrlFromFile(mpdFile, offsetMs || 0);
-  if (!url) return null;
-
-  const tokenObj = { file: mpdFile };
-  if (pos0 !== null) tokenObj.pos0 = pos0;
-
-  const token = makeToken(tokenObj);
-
-  return {
+  const directive = {
     type: 'AudioPlayer.Play',
     playBehavior: 'REPLACE_ALL',
     audioItem: {
       stream: {
-        token,
-        url,
-        offsetInMilliseconds: offsetMs || 0,
+        token: token,
+        url: url,
+        offsetInMilliseconds: PRIME_START_OFFSET_MS,
       },
-      metadata: buildMetadataFromNowPlaying(d, 'Now Playing'),
+      metadata: {
+        title: title || spokenTitle || 'Now playing',
+        subtitle: (artist ? artist : '') + (album ? ' -- ' + album : ''),
+        art: artUrl ? { sources: [{ url: artUrl }] } : undefined,
+        backgroundImage: artUrl ? { sources: [{ url: artUrl }] } : undefined,
+      },
     },
   };
+
+  return directive;
 }
 
-/**
- * ENQUEUE helper
- * - Requires next.file and next.songpos (pos0) and finishedToken
- * - Sets expectedPreviousToken at stream + top-level (Echo differences)
- */
-function buildPlayEnqueue(next, finishedToken) {
-  next = next || {};
-  const nextFile = String(next.file || '').trim();
+function buildPlayEnqueue(track, expectedPreviousToken) {
+  const file = safeStr(track.file);
+  const pos0 = safeNum(track.songpos, null);
+  if (!file || pos0 === null) return null;
 
-  const posRaw = (next.songpos !== undefined && next.songpos !== null)
-    ? String(next.songpos).trim()
-    : '';
+  const token = makeToken({ file: file, pos0: pos0 });
 
-  const nextPos0 = (posRaw !== '' && isFinite(Number(posRaw))) ? Number(posRaw) : null;
-  const expectedPreviousToken = String(finishedToken || '').trim();
+  const title = safeStr(track.title);
+  const artist = safeStr(track.artist);
+  const album = safeStr(track.album);
+  const artUrl = absolutizeMaybe(track.albumArtUrl || track.altArtUrl || '');
 
-  if (!nextFile || nextPos0 === null || !expectedPreviousToken) return null;
+  const url =
+    PUBLIC_TRACK_BASE +
+    '/track?file=' + encodeURIComponent(file) +
+    (TRACK_KEY ? '&k=' + encodeURIComponent(TRACK_KEY) : '');
 
-  const nextToken = makeToken({ file: nextFile, pos0: nextPos0 });
-  const url = buildTrackUrlFromFile(nextFile, 0);
-
-  const meta = {
-    title: String(next.title || '').trim(),
-    subtitle: (() => {
-      let s = '';
-      if (next.artist) s += String(next.artist);
-      if (next.album) s += (s ? ' -- ' : '') + String(next.album);
-      return s.trim();
-    })(),
-  };
-
-  const artUrl = pickPublicArtUrl(next, nextFile);
-  if (artUrl) {
-    meta.art = { sources: [{ url: artUrl }] };
-    meta.backgroundImage = { sources: [{ url: artUrl }] };
-  }
-
-  return {
+  const directive = {
     type: 'AudioPlayer.Play',
     playBehavior: 'ENQUEUE',
     audioItem: {
       stream: {
-        token: nextToken,
-        url,
+        token: token,
+        url: url,
         offsetInMilliseconds: 0,
-        expectedPreviousToken,
+        expectedPreviousToken: expectedPreviousToken || undefined,
       },
-      metadata: meta,
+      metadata: {
+        title: title || 'Up next',
+        subtitle: (artist ? artist : '') + (album ? ' -- ' + album : ''),
+        art: artUrl ? { sources: [{ url: artUrl }] } : undefined,
+        backgroundImage: artUrl ? { sources: [{ url: artUrl }] } : undefined,
+      },
     },
-    expectedPreviousToken,
+    expectedPreviousToken: expectedPreviousToken || undefined,
   };
+
+  return directive;
 }
 
 /* =========================
  * Stable snapshot (double fetch)
  * ========================= */
 
-async function getStableNowPlaying() {
-  await sleep(META_STABLE_GAP_MS);
+async function getStableNowPlayingSnapshot() {
+  // Double fetch: if queue is mid-mutation, the second read is often the "truth".
+  // If either fails, throw up to caller.
+  const a = await apiNowPlaying();
+  const b = await apiNowPlaying();
 
-  let a = null;
-  let b = null;
+  // Prefer non-null
+  const pick = b || a;
 
-  try { a = await getNowPlaying(); } catch (e) { a = null; }
-  await sleep(120);
-  try { b = await getNowPlaying(); } catch (e) { b = null; }
+  // Normalize
+  if (!pick || !pick.file) return null;
 
-  const src = (b && b.file) ? b : (a && a.file) ? a : (b || a || null);
-  if (!src) return null;
-
-  return {
-    title: decodeHtmlEntities(src.title || ''),
-    artist: decodeHtmlEntities(src.artist || ''),
-    album: decodeHtmlEntities(src.album || ''),
-    file: String(src.file || '').trim(),
-    songpos: (src.songpos !== undefined && src.songpos !== null) ? String(src.songpos).trim() : '',
-    songid: (src.songid !== undefined && src.songid !== null) ? String(src.songid).trim() : '',
-    aplArtUrl: absolutizeMaybe(src.aplArtUrl || ''),
-    albumArtUrl: absolutizeMaybe(src.albumArtUrl || ''),
-    altArtUrl: absolutizeMaybe(src.altArtUrl || ''),
-    elapsedSec: Number(src.elapsed || 0),
-    durationSec: Number(src.duration || 0),
-  };
+  // Ensure songpos numeric-ish; moode endpoint returns string sometimes
+  pick.songpos = safeStr(pick.songpos);
+  return pick;
 }
 
 /* =========================
  * Queue advance idempotency
  * ========================= */
 
-async function ensureQueueAdvancedForToken(token, offsetMs) {
-  const startedToken = String(token || '').trim();
-  const startedOffsetMs = Number(offsetMs || 0) || 0;
+let lastAdvancedToken = '';
+let lastAdvancedAt = 0;
 
-  if (!startedToken) return false;
+let lastEnqueuedToken = '';
+let lastEnqueueAt = 0;
 
-  // Resume guard: same token + non-zero offset => do not advance
-  if (startedToken === lastKnownToken && startedOffsetMs > 0) {
-    console.log('ensureQueueAdvancedForToken: resume detected; skip advance', { startedOffsetMs, lastKnownOffsetMs });
+let lastEnqueuePrevToken = '';
+let lastEnqueuePrevAt = 0;
+
+function recentlyAdvancedForToken(token) {
+  const t = safeStr(token);
+  if (!t) return false;
+  if (t !== lastAdvancedToken) return false;
+  return (nowMs() - lastAdvancedAt) < ADVANCE_GUARD_MS;
+}
+
+function markAdvancedForToken(token) {
+  lastAdvancedToken = safeStr(token);
+  lastAdvancedAt = nowMs();
+}
+
+function recentlyEnqueuedToken(token) {
+  const t = safeStr(token);
+  if (!t) return false;
+  if (t !== lastEnqueuedToken) return false;
+  return (nowMs() - lastEnqueueAt) < ENQUEUE_GUARD_MS;
+}
+
+function markEnqueuedToken(token, prevToken) {
+  lastEnqueuedToken = safeStr(token);
+  lastEnqueueAt = nowMs();
+  lastEnqueuePrevToken = safeStr(prevToken);
+  lastEnqueuePrevAt = nowMs();
+}
+
+function enqueueAlreadyIssuedForPrevToken(prevToken) {
+  const p = safeStr(prevToken);
+  if (!p) return false;
+  if (p !== lastEnqueuePrevToken) return false;
+  // small window is fine; we just need to suppress immediate fallback
+  return (nowMs() - lastEnqueuePrevAt) < (ADVANCE_GUARD_MS + 2000);
+}
+
+async function advanceFromTokenIfNeeded(token) {
+  const tok = safeStr(token);
+  if (!tok) return false;
+
+  if (recentlyAdvancedForToken(tok)) {
     return false;
   }
 
-  const now = Date.now();
+  const parsed = parseTokenB64(tok);
+  if (!parsed) return false;
 
-  // Dedup: Alexa can duplicate events
-  if (startedToken === lastAdvancedToken && (now - lastAdvancedAt) < 15000) {
-    console.log('ensureQueueAdvancedForToken: skip duplicate advance for same token');
-    return false;
-  }
+  const file = safeStr(parsed.file);
+  const pos0 = safeNum(parsed.pos0, null);
 
-  const parsed = parseToken(startedToken) || {};
-  const pos0 =
-    (parsed.pos0 !== undefined && parsed.pos0 !== null && isFinite(Number(parsed.pos0)))
-      ? Number(parsed.pos0)
-      : null;
+  if (!file || pos0 === null) return false;
 
-  if (pos0 === null) {
-    console.log('ensureQueueAdvancedForToken: missing pos0; cannot advance');
-    return false;
-  }
-
-  await queueAdvance(pos0, parsed.file);
-
-  lastAdvancedToken = startedToken;
-  lastAdvancedAt = now;
-
-  console.log('ensureQueueAdvancedForToken: advanced pos0=', pos0);
+  await apiQueueAdvance(pos0, file);
+  markAdvancedForToken(tok);
   return true;
 }
 
@@ -463,13 +371,12 @@ async function ensureQueueAdvancedForToken(token, offsetMs) {
 const LogRequestInterceptor = {
   process(handlerInput) {
     try {
-      const req = handlerInput.requestEnvelope.request || {};
-      console.log('INCOMING request.type:', req.type);
-      if (req.type === 'IntentRequest') {
-        console.log('INCOMING intent:', req.intent && req.intent.name);
-      }
+      const req = handlerInput.requestEnvelope && handlerInput.requestEnvelope.request;
+      const t = req && req.type ? req.type : 'unknown';
+      console.log('INCOMING request.type:', t);
+      console.log('VERSION:', VERSION);
     } catch (e) {
-      console.log('INCOMING log failed:', e && e.message ? e.message : String(e));
+      console.log('LogRequestInterceptor failed:', e && e.message ? e.message : String(e));
     }
   },
 };
@@ -485,184 +392,47 @@ const LaunchRequestHandler = {
 
   async handle(handlerInput) {
     try {
-      const d = await getStableNowPlaying();
-      console.log('DEBUG /now-playing snapshot:', d ? JSON.stringify(d, null, 2) : null);
+      // Optional but nice: fail fast if TRACK_KEY is missing and you expect it.
+      // We’re delaying this per your note, but leaving the guard here commented.
+      // if (!TRACK_KEY) return speak(handlerInput, 'Check authorization key.');
 
-      const play = buildPlayReplaceAllFromNowPlaying(d, 0);
-      if (!play) {
-        return handlerInput.responseBuilder
-          .speak('I cannot find the current track to play right now.')
-          .withShouldEndSession(true)
-          .getResponse();
+      const snap = await getStableNowPlayingSnapshot();
+      if (!snap || !snap.file) {
+        return speak(handlerInput, 'I cannot find the current track to play right now.');
+      }
+
+      const directive = buildPlayReplaceAll(snap, 'Starting playback');
+
+      // After we start the session’s first REPLACE, immediately advance MPD head so /now-playing becomes next track.
+      // Use the token we just issued, since it encodes {file,pos0}.
+      const issuedToken = directive.audioItem.stream.token;
+
+      try {
+        await advanceFromTokenIfNeeded(issuedToken);
+        console.log('Launch: advanced MPD head for first track');
+      } catch (e) {
+        console.log('Launch: advance failed:', e && e.message ? e.message : String(e));
       }
 
       return handlerInput.responseBuilder
-        .speak('Starting moode.')
-        .addDirective(play)
-        .withShouldEndSession(true)
-        .getResponse();
-    } catch (e) {
-      console.error('LaunchRequest error:', e);
-      return handlerInput.responseBuilder
-        .speak('Sorry, I could not start moode right now.')
-        .withShouldEndSession(true)
-        .getResponse();
-    }
-  },
-};
-
-const NowPlayingIntentHandler = {
-  canHandle(handlerInput) {
-    const r = handlerInput.requestEnvelope.request;
-    return r && r.type === 'IntentRequest' && r.intent && r.intent.name === 'NowPlayingIntent';
-  },
-
-  async handle(handlerInput) {
-    try {
-      const d = await getStableNowPlaying();
-      if (!d || !d.title) {
-        return handlerInput.responseBuilder
-          .speak('Nothing is queued.')
-          .withShouldEndSession(true)
-          .getResponse();
-      }
-
-      const speech =
-        'Now playing ' +
-        (d.title ? d.title : 'a track') +
-        (d.artist ? ' by ' + d.artist : '') +
-        '.';
-
-      return handlerInput.responseBuilder
-        .speak(speech)
-        .withShouldEndSession(true)
-        .getResponse();
-    } catch (e) {
-      console.error('NowPlayingIntent error:', e);
-      return handlerInput.responseBuilder
-        .speak('Sorry, I could not get that.')
-        .withShouldEndSession(true)
-        .getResponse();
-    }
-  },
-};
-
-const PauseIntentHandler = {
-  canHandle(handlerInput) {
-    const r = handlerInput.requestEnvelope.request;
-    return r && r.type === 'IntentRequest' && r.intent &&
-      (r.intent.name === 'AMAZON.PauseIntent' || r.intent.name === 'PauseIntent');
-  },
-
-  async handle(handlerInput) {
-    return handlerInput.responseBuilder
-      .addDirective({ type: 'AudioPlayer.Stop' })
-      .withShouldEndSession(true)
-      .getResponse();
-  },
-};
-
-const ResumeIntentHandler = {
-  canHandle(handlerInput) {
-    const r = handlerInput.requestEnvelope.request;
-    return r && r.type === 'IntentRequest' && r.intent &&
-      (r.intent.name === 'AMAZON.ResumeIntent' ||
-       r.intent.name === 'ResumeIntent' ||
-       r.intent.name === 'AMAZON.PlayIntent');
-  },
-
-  async handle(handlerInput) {
-    try {
-      // If no resume state, start fresh from stable /now-playing
-      if (!lastKnownToken) {
-        const d = await getStableNowPlaying();
-        const play = buildPlayReplaceAllFromNowPlaying(d, 0);
-        if (!play) {
-          return handlerInput.responseBuilder.speak('Nothing to play.').withShouldEndSession(true).getResponse();
-        }
-        return handlerInput.responseBuilder
-          .speak('Resuming.')
-          .addDirective(play)
-          .withShouldEndSession(true)
-          .getResponse();
-      }
-
-      const parsed = parseToken(lastKnownToken) || {};
-      const file = String(parsed.file || '').trim();
-      const offsetMs = Number(lastKnownOffsetMs || 0) || 0;
-
-      if (!file) {
-        return handlerInput.responseBuilder.speak('Sorry, I could not resume.').withShouldEndSession(true).getResponse();
-      }
-
-      const url = buildTrackUrlFromFile(file, offsetMs);
-      const directive = {
-        type: 'AudioPlayer.Play',
-        playBehavior: 'REPLACE_ALL',
-        audioItem: {
-          stream: {
-            token: lastKnownToken,
-            url,
-            offsetInMilliseconds: offsetMs,
-          },
-        },
-      };
-
-      return handlerInput.responseBuilder
-        .speak('Resuming.')
+        .speak('Playing.')
         .addDirective(directive)
-        .withShouldEndSession(true)
         .getResponse();
     } catch (e) {
-      console.error('Resume error:', e);
-      return handlerInput.responseBuilder.speak('Sorry, I could not resume.').withShouldEndSession(true).getResponse();
+      console.log('Launch error:', e && e.message ? e.message : String(e));
+      return speak(handlerInput, 'I cannot start playback right now.');
     }
   },
 };
 
-const NextIntentHandler = {
-  canHandle(handlerInput) {
-    const r = handlerInput.requestEnvelope.request;
-    return r && r.type === 'IntentRequest' && r.intent &&
-      (r.intent.name === 'AMAZON.NextIntent' || r.intent.name === 'NextIntent' || r.intent.name === 'SkipIntent');
-  },
-
-  async handle(handlerInput) {
-    try {
-      // "Next" for Alexa playback: just start the current /now-playing (which should already be the next file)
-      const d = await getStableNowPlaying();
-      console.log('NextIntent: /now-playing snapshot:', d ? JSON.stringify(d, null, 2) : null);
-
-      const play = buildPlayReplaceAllFromNowPlaying(d, 0);
-      if (!play) {
-        return handlerInput.responseBuilder
-          .speak('No next track found.')
-          .withShouldEndSession(true)
-          .getResponse();
-      }
-
-      return handlerInput.responseBuilder
-        .speak('Skipping.')
-        .addDirective(play)
-        .withShouldEndSession(true)
-        .getResponse();
-    } catch (e) {
-      console.error('NextIntent error:', e);
-      return handlerInput.responseBuilder
-        .speak('Sorry, I could not skip.')
-        .withShouldEndSession(true)
-        .getResponse();
-    }
-  },
-};
-
+// Minimal "Stop" / "Cancel"
 const StopHandler = {
   canHandle(handlerInput) {
-    const r = handlerInput.requestEnvelope.request;
-    return r && r.type === 'IntentRequest' && r.intent &&
-      (r.intent.name === 'AMAZON.StopIntent' || r.intent.name === 'AMAZON.CancelIntent');
+    const t = Alexa.getRequestType(handlerInput.requestEnvelope);
+    if (t !== 'IntentRequest') return false;
+    const name = Alexa.getIntentName(handlerInput.requestEnvelope);
+    return name === 'AMAZON.StopIntent' || name === 'AMAZON.CancelIntent';
   },
-
   handle(handlerInput) {
     return handlerInput.responseBuilder
       .addDirective({ type: 'AudioPlayer.Stop' })
@@ -677,32 +447,12 @@ const StopHandler = {
 
 const PlaybackControllerEventHandler = {
   canHandle(handlerInput) {
-    const req = handlerInput.requestEnvelope && handlerInput.requestEnvelope.request;
-    return !!(req && req.type && String(req.type).indexOf('PlaybackController.') === 0);
+    return Alexa.getRequestType(handlerInput.requestEnvelope) === 'PlaybackController.NextCommandIssued'
+      || Alexa.getRequestType(handlerInput.requestEnvelope) === 'PlaybackController.PreviousCommandIssued';
   },
-
-  async handle(handlerInput) {
-    const req = handlerInput.requestEnvelope.request;
-    console.log('PlaybackController event:', req.type);
-
-    try {
-      if (req.type === 'PlaybackController.PauseCommandIssued') {
-        return handlerInput.responseBuilder.addDirective({ type: 'AudioPlayer.Stop' }).getResponse();
-      }
-
-      if (req.type === 'PlaybackController.PlayCommandIssued' || req.type === 'PlaybackController.NextCommandIssued') {
-        const d = await getStableNowPlaying();
-        const play = buildPlayReplaceAllFromNowPlaying(d, 0);
-        if (!play) return handlerInput.responseBuilder.getResponse();
-        console.log('Play directive:', JSON.stringify(play, null, 2));
-        return handlerInput.responseBuilder.addDirective(play).getResponse();
-      }
-
-      return handlerInput.responseBuilder.getResponse();
-    } catch (e) {
-      console.error('PlaybackController handler error:', e);
-      return handlerInput.responseBuilder.getResponse();
-    }
+  handle(handlerInput) {
+    // Keep it simple: let AudioPlayer events drive queue.
+    return handlerInput.responseBuilder.getResponse();
   },
 };
 
@@ -712,182 +462,148 @@ const PlaybackControllerEventHandler = {
 
 const AudioPlayerEventHandler = {
   canHandle(handlerInput) {
-    const req = handlerInput.requestEnvelope && handlerInput.requestEnvelope.request;
-    return !!(req && req.type && String(req.type).startsWith('AudioPlayer.'));
+    const t = Alexa.getRequestType(handlerInput.requestEnvelope);
+    return t && String(t).startsWith('AudioPlayer.');
   },
 
   async handle(handlerInput) {
-    const req = handlerInput.requestEnvelope.request || {};
-    const eventType = String(req.type || '');
+    const eventType = getEventType(handlerInput);
+    const token = getAudioPlayerToken(handlerInput);
 
-    console.log('AudioPlayer event:', eventType);
-
-    // Store resume state helper
-    function storeResumeState() {
-      lastKnownToken = String(req.token || getCurrentTokenBestEffort(handlerInput) || '').trim();
-      lastKnownOffsetMs = Number(req.offsetInMilliseconds || 0) || 0;
-
-      console.log('Stored resume state:', {
-        tokenPrefix: lastKnownToken ? lastKnownToken.slice(0, 120) : '',
-        offsetMs: lastKnownOffsetMs,
-      });
-    }
-
-    // 1) Store resume state on stop/pause/fail
-    if (
-      eventType === 'AudioPlayer.PlaybackStopped' ||
-      eventType === 'AudioPlayer.PlaybackPaused' ||
-      eventType === 'AudioPlayer.PlaybackFailed'
-    ) {
-      storeResumeState();
-      return handlerInput.responseBuilder.getResponse();
-    }
-
-    // 2) PlaybackStarted => advance MPD queue once
+    // 1) PlaybackStarted => ensure we have advanced for this token (idempotent)
     if (eventType === 'AudioPlayer.PlaybackStarted') {
       try {
-        const startedToken = String(req.token || getCurrentTokenBestEffort(handlerInput) || '').trim();
-        const startedOffsetMs = Number(req.offsetInMilliseconds || 0) || 0;
+        console.log('AudioPlayer event:', eventType);
+        console.log('PlaybackStarted: token prefix:', safeStr(token).slice(0, 160));
 
-        console.log('PlaybackStarted: token prefix:', startedToken.slice(0, 160));
-        console.log('PlaybackStarted: offsetInMilliseconds=', startedOffsetMs);
-
-        await ensureQueueAdvancedForToken(startedToken, startedOffsetMs);
+        try {
+          const advanced = await advanceFromTokenIfNeeded(token);
+          if (advanced) console.log('PlaybackStarted: advanced queue for this token');
+        } catch (e) {
+          console.log('PlaybackStarted: advance failed:', e && e.message ? e.message : String(e));
+        }
 
         return handlerInput.responseBuilder.getResponse();
       } catch (e) {
-        console.error('PlaybackStarted handler failed:', e && e.message ? e.message : String(e));
+        console.log('PlaybackStarted handler failed:', e && e.message ? e.message : String(e));
         return handlerInput.responseBuilder.getResponse();
       }
     }
 
-    // 3) PlaybackNearlyFinished => ENQUEUE next via /next-up
+    // 2) PlaybackNearlyFinished => ENQUEUE next based on /now-playing (after prior advance)
     if (eventType === 'AudioPlayer.PlaybackNearlyFinished') {
-        try {
-            const finishedToken = String(req.token || getCurrentTokenBestEffort(handlerInput) || '').trim();
-            if (!finishedToken) {
-                console.log('NearlyFinished: missing finishedToken; cannot ENQUEUE');
-                return handlerInput.responseBuilder.getResponse();
-            }
+      try {
+        console.log('AudioPlayer event:', eventType);
+        const finishedToken = safeStr(token);
 
-            console.log('NearlyFinished: token prefix:', finishedToken.slice(0, 160));
-
-            // Safety: make sure we advanced at least once for this token
-            let advanced = false;
-            try {
-                advanced = await ensureQueueAdvancedForToken(finishedToken, 0);
-            } catch (e) {
-                advanced = false;
-                console.log(
-                    'NearlyFinished: ensureQueueAdvancedForToken failed:',
-                    (e && e.message) ? e.message : String(e)
-                );
-            }
-            console.log('NearlyFinished: ensureQueueAdvancedForToken =>', !!advanced);
-
-            const nextUp = await getNextUp();
-            console.log('NearlyFinished: /next-up payload:', nextUp ? JSON.stringify(nextUp, null, 2) : null);
-
-            const next = (nextUp && nextUp.ok) ? nextUp.next : null;
-            if (!next || !next.file) {
-                console.log('NearlyFinished: no next from /next-up; skipping ENQUEUE');
-                return handlerInput.responseBuilder.getResponse();
-            }
-
-            const nextFile = String(next.file || '').trim();
-
-            const nextPos0raw =
-                (next.songpos !== undefined && next.songpos !== null) ? String(next.songpos).trim() : '';
-
-            const nextPos0 =
-                (nextPos0raw !== '' && isFinite(Number(nextPos0raw))) ? Number(nextPos0raw) : null;
-
-            if (!nextFile || nextPos0 === null) {
-                console.log('NearlyFinished: missing nextFile or nextPos0; skipping ENQUEUE');
-                return handlerInput.responseBuilder.getResponse();
-            }
-
-            // Dedup enqueues
-            const candidateToken = makeToken({ file: nextFile, pos0: nextPos0 });
-            const now = Date.now();
-            if (candidateToken === lastEnqueuedToken && (now - lastEnqueueAt) < NEXT_ENQUEUE_GAP_MS) {
-                console.log('NearlyFinished: skip duplicate enqueue token');
-                return handlerInput.responseBuilder.getResponse();
-            }
-
-            const enq = buildPlayEnqueue({
-                file: nextFile,
-                songpos: nextPos0,
-                title: decodeHtmlEntities(next.title || ''),
-                artist: decodeHtmlEntities(next.artist || ''),
-                album: decodeHtmlEntities(next.album || ''),
-                // /next-up already gives public artUrl
-                altArtUrl: absolutizeMaybe(next.artUrl || ''),
-            }, finishedToken);
-
-            if (!enq) {
-                console.log('NearlyFinished: could not build ENQUEUE directive');
-                return handlerInput.responseBuilder.getResponse();
-            }
-
-            lastEnqueuedToken = candidateToken;
-            lastEnqueueAt = now;
-
-            // Critical: mark that ENQUEUE happened for this finished token
-            lastEnqueuePrevToken = finishedToken;
-            lastEnqueuePrevAt = now;
-
-            console.log('NearlyFinished: ENQUEUE next:', nextFile, 'pos0=', nextPos0);
-            console.log('NearlyFinished: enqueue directive:', JSON.stringify(enq, null, 2));
-
-            return handlerInput.responseBuilder
-                .addDirective(enq)
-                .getResponse();
-        } catch (e) {
-            console.error('NearlyFinished handler failed:', (e && e.message) ? e.message : String(e));
-            return handlerInput.responseBuilder.getResponse();
+        if (!finishedToken) {
+          console.log('NearlyFinished: missing finishedToken; cannot ENQUEUE');
+          return handlerInput.responseBuilder.getResponse();
         }
+
+        console.log('NearlyFinished: token prefix:', finishedToken.slice(0, 160));
+
+        // Snapshot of "what should play next" is always /now-playing (because we advanced earlier)
+        const snap = await getStableNowPlayingSnapshot();
+        console.log('NearlyFinished: /now-playing snapshot:', snap ? JSON.stringify(snap, null, 2) : null);
+
+        if (!snap || !snap.file) {
+          console.log('NearlyFinished: no next from /now-playing; skipping ENQUEUE');
+          return handlerInput.responseBuilder.getResponse();
+        }
+
+        const nextFile = safeStr(snap.file);
+        const nextPos0 = safeNum(snap.songpos, null);
+
+        if (!nextFile || nextPos0 === null) {
+          console.log('NearlyFinished: missing nextFile or nextPos0; skipping ENQUEUE');
+          return handlerInput.responseBuilder.getResponse();
+        }
+
+        const candidateToken = makeToken({ file: nextFile, pos0: nextPos0 });
+
+        // Dedup ENQUEUE
+        if (recentlyEnqueuedToken(candidateToken)) {
+          console.log('NearlyFinished: skip duplicate enqueue token');
+          return handlerInput.responseBuilder.getResponse();
+        }
+
+        const enq = buildPlayEnqueue(
+          {
+            file: nextFile,
+            songpos: String(nextPos0),
+            title: decodeHtmlEntities(snap.title || ''),
+            artist: decodeHtmlEntities(snap.artist || ''),
+            album: decodeHtmlEntities(snap.album || ''),
+            albumArtUrl: absolutizeMaybe(snap.albumArtUrl || ''),
+            altArtUrl: absolutizeMaybe(snap.altArtUrl || ''),
+          },
+          finishedToken
+        );
+
+        if (!enq) {
+          console.log('NearlyFinished: could not build ENQUEUE directive');
+          return handlerInput.responseBuilder.getResponse();
+        }
+
+        // After we ENQUEUE this track, immediately advance MPD head for that enqueued token
+        // so /now-playing becomes the NEXT next.
+        try {
+          await advanceFromTokenIfNeeded(candidateToken);
+          console.log('NearlyFinished: advanced MPD head for enqueued track pos0=', nextPos0);
+        } catch (e) {
+          console.log('NearlyFinished: advance after enqueue failed:', e && e.message ? e.message : String(e));
+        }
+
+        markEnqueuedToken(candidateToken, finishedToken);
+
+        console.log('NearlyFinished: ENQUEUE next:', nextFile, 'pos0=', nextPos0);
+        console.log('NearlyFinished: enqueue directive:', JSON.stringify(enq, null, 2));
+
+        return handlerInput.responseBuilder
+          .addDirective(enq)
+          .getResponse();
+
+      } catch (e) {
+        console.log('NearlyFinished handler failed:', e && e.message ? e.message : String(e));
+        return handlerInput.responseBuilder.getResponse();
+      }
     }
-    
-    // 4) PlaybackFinished => ONLY fallback if we did NOT recently ENQUEUE for this token
+
+    // 3) PlaybackFinished => do nothing if we already enqueued for this finished token
     if (eventType === 'AudioPlayer.PlaybackFinished') {
       try {
-        const finishedToken = String(req.token || getCurrentTokenBestEffort(handlerInput) || '').trim();
-        const now = Date.now();
+        console.log('AudioPlayer event:', eventType);
 
-        // If we ENQUEUE'd for this exact finished token recently, DO NOTHING.
-        if (
-          finishedToken &&
-          finishedToken === lastEnqueuePrevToken &&
-          (now - lastEnqueuePrevAt) < 120000
-        ) {
+        if (enqueueAlreadyIssuedForPrevToken(token)) {
           console.log('PlaybackFinished: enqueue already issued; no action');
           return handlerInput.responseBuilder.getResponse();
         }
 
+        // Fallback: if no enqueue happened, we can do a safe REPLACE_ALL from /now-playing.
+        // (You can remove this fallback once you trust NearlyFinished always arrives.)
         console.log('PlaybackFinished: fallback continue (REPLACE_ALL)');
+        const snap = await getStableNowPlayingSnapshot();
+        if (!snap || !snap.file) return handlerInput.responseBuilder.getResponse();
 
-        // Fallback: start whatever /now-playing says is current
-        const d = await getStableNowPlaying();
-        console.log('PlaybackFinished: /now-playing snapshot:', d ? JSON.stringify(d, null, 2) : null);
+        const directive = buildPlayReplaceAll(snap, 'Continuing playback');
 
-        const play = buildPlayReplaceAllFromNowPlaying(d, 0);
-        if (!play) {
-          console.log('PlaybackFinished: no playable next track found; no action');
-          return handlerInput.responseBuilder.getResponse();
-        }
+        // And advance immediately so /now-playing stays "next"
+        try {
+          await advanceFromTokenIfNeeded(directive.audioItem.stream.token);
+        } catch (e) {}
 
-        console.log('PlaybackFinished: issuing REPLACE_ALL directive:', JSON.stringify(play, null, 2));
         return handlerInput.responseBuilder
-          .addDirective(play)
+          .addDirective(directive)
           .getResponse();
+
       } catch (e) {
-        console.error('PlaybackFinished fallback failed:', e && e.message ? e.message : String(e));
+        console.log('PlaybackFinished handler failed:', e && e.message ? e.message : String(e));
         return handlerInput.responseBuilder.getResponse();
       }
     }
 
-    // 5) Other AudioPlayer events => no action
+    // Default: ignore
     return handlerInput.responseBuilder.getResponse();
   },
 };
@@ -898,52 +614,11 @@ const AudioPlayerEventHandler = {
 
 const SystemExceptionHandler = {
   canHandle(handlerInput) {
-    const req = handlerInput.requestEnvelope && handlerInput.requestEnvelope.request;
-    return !!(req && req.type === 'System.ExceptionEncountered');
+    return Alexa.getRequestType(handlerInput.requestEnvelope) === 'System.ExceptionEncountered';
   },
-
   handle(handlerInput) {
-    const req = handlerInput.requestEnvelope.request;
-    console.log('System.ExceptionEncountered:', JSON.stringify(req, null, 2));
+    console.log('System.ExceptionEncountered');
     return handlerInput.responseBuilder.getResponse();
-  },
-};
-
-const SessionEndedRequestHandler = {
-  canHandle(handlerInput) {
-    return Alexa.getRequestType(handlerInput.requestEnvelope) === 'SessionEndedRequest';
-  },
-
-  handle(handlerInput) {
-    console.log('Session ended:', JSON.stringify(handlerInput.requestEnvelope.request, null, 2));
-    return handlerInput.responseBuilder.getResponse();
-  },
-};
-
-const IntentReflectorHandler = {
-  canHandle(handlerInput) {
-    return Alexa.getRequestType(handlerInput.requestEnvelope) === 'IntentRequest';
-  },
-
-  handle(handlerInput) {
-    const intentName = Alexa.getIntentName(handlerInput.requestEnvelope);
-    console.log('IntentReflector hit for:', intentName);
-    return handlerInput.responseBuilder
-      .speak('I received ' + intentName + '.')
-      .withShouldEndSession(true)
-      .getResponse();
-  },
-};
-
-const ErrorHandler = {
-  canHandle() { return true; },
-
-  handle(handlerInput, error) {
-    console.error('Unhandled error:', error);
-    return handlerInput.responseBuilder
-      .speak('Sorry, something went wrong.')
-      .withShouldEndSession(true)
-      .getResponse();
   },
 };
 
@@ -951,22 +626,24 @@ const ErrorHandler = {
  * Skill builder
  * ========================= */
 
+const ErrorHandler = {
+  canHandle() { return true; },
+  handle(handlerInput, error) {
+    console.log('ErrorHandler:', error && error.message ? error.message : String(error));
+    return handlerInput.responseBuilder.getResponse();
+  },
+};
+
 exports.handler = Alexa.SkillBuilders.custom()
   .addRequestInterceptors(LogRequestInterceptor)
   .addRequestHandlers(
     LaunchRequestHandler,
-    NowPlayingIntentHandler,
-    NextIntentHandler,
-    PauseIntentHandler,
-    ResumeIntentHandler,
     StopHandler,
 
     PlaybackControllerEventHandler,
     AudioPlayerEventHandler,
 
-    SystemExceptionHandler,
-    SessionEndedRequestHandler,
-    IntentReflectorHandler
+    SystemExceptionHandler
   )
   .addErrorHandlers(ErrorHandler)
   .lambda();
