@@ -10,8 +10,8 @@ const https = require('https');
 const { URL } = require('url');
 
 const VERSION = 1; // bump when you deploy
-const API_BASE = String(process.env.API_BASE || 'https://moode.brianwis.com').replace(/\/+$/, '');
-const TRACK_KEY = String(process.env.TRACK_KEY || '1029384756').trim();
+const API_BASE = String(process.env.API_BASE || 'https://moode.CHANGE TO YOUR DOMAIN NAM.com').replace(/\/+$/, '');
+const TRACK_KEY = String(process.env.TRACK_KEY || 'PUT YOUR TRACK KEY HERE').trim();
 const PUBLIC_TRACK_BASE = String(process.env.PUBLIC_TRACK_BASE || API_BASE).replace(/\/+$/, ''); // usually same as API_BASE
 
 // Tuneables
