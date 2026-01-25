@@ -16,10 +16,6 @@
                     "samples": []
                 },
                 {
-                    "name": "AMAZON.NavigateHomeIntent",
-                    "samples": []
-                },
-                {
                     "name": "AMAZON.FallbackIntent",
                     "samples": []
                 },
@@ -32,62 +28,12 @@
                     "samples": []
                 },
                 {
-                    "name": "PlayIntent",
-                    "slots": [],
-                    "samples": [
-                        "play music",
-                        "play"
-                    ]
+                    "name": "AMAZON.PlayIntent",
+                    "samples": []
                 },
                 {
-                    "name": "NextIntent",
-                    "slots": [],
-                    "samples": [
-                        "skip this track",
-                        "skip this song",
-                        "next track",
-                        "next song",
-                        "skip",
-                        "next"
-                    ]
-                },
-                {
-                    "name": "PauseIntent",
-                    "slots": [],
-                    "samples": [
-                        "pause the queue",
-                        "pause the music",
-                        "pause"
-                    ]
-                },
-                {
-                    "name": "ResumeIntent",
-                    "slots": [],
-                    "samples": [
-                        "resume mood",
-                        "resume mood audio",
-                        "resume the queue",
-                        "resume the music",
-                        "resume"
-                    ]
-                },
-                {
-                    "name": "PlayPlaylistIntent",
-                    "slots": [
-                        {
-                            "name": "playlist",
-                            "type": "AMAZON.SearchQuery"
-                        }
-                    ],
-                    "samples": [
-                        "queue the playlist {playlist}",
-                        "start the playlist {playlist}",
-                        "playlist {playlist}",
-                        "play my playlist {playlist}",
-                        "start my playlist {playlist}",
-                        "start playlist {playlist}",
-                        "play playlist {playlist}"
-                    ]
+                    "name": "AMAZON.NextIntent",
+                    "samples": []
                 },
                 {
                     "name": "NowPlayingIntent",
@@ -118,8 +64,30 @@
                         }
                     ],
                     "samples": [
+                        "play album {album}",
+                        "play the album {album}",
+                        "start album {album}",
                         "queue album {album}",
                         "queue the album {album}"
+                    ]
+                },
+                {
+                    "name": "PlayPlaylistIntent",
+                    "slots": [
+                        {
+                            "name": "playlist",
+                            "type": "AMAZON.SearchQuery"
+                        }
+                    ],
+                    "samples": [
+                        "play playlist {playlist}",
+                        "play the playlist {playlist}",
+                        "start playlist {playlist}",
+                        "start the playlist {playlist}",
+                        "queue playlist {playlist}",
+                        "queue the playlist {playlist}",
+                        "play my playlist {playlist}",
+                        "start my playlist {playlist}"
                     ]
                 }
             ],
