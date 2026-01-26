@@ -619,6 +619,13 @@ async function mpdDeletePos0(pos0) {
   return true;
 }
 
+async function mpdDeleteId(songid) {
+  const id = Number(songid);
+  if (!Number.isFinite(id) || id < 0) throw new Error('bad songid');
+  await mpdQueryRaw(`deleteid ${id}`);
+  return true;
+}
+
 async function mpdPlaylistInfoById(songid) {
   if (songid === '' || songid === null || songid === undefined) return null;
   const raw = await mpdQueryRaw(`playlistid ${songid}`);
@@ -1488,51 +1495,66 @@ app.post('/mpd/prime', async (req, res) => {
 
 app.post('/queue/advance', async (req, res) => {
   try {
-    // Protect it (same shared secret as /track)
     if (!requireTrackKey(req, res)) return;
 
-    // Accept pos0 from JSON body OR querystring
+    // Accept songid (preferred) from JSON body OR querystring
+    const songidRaw =
+      (req?.body?.songid !== undefined ? req.body.songid : undefined) ??
+      (req?.query?.songid !== undefined ? req.query.songid : undefined);
+
+    const songid = Number.parseInt(String(songidRaw ?? '').trim(), 10);
+
+    // Accept pos0 as optional fallback / diagnostics
     const pos0raw =
       (req?.body?.pos0 !== undefined ? req.body.pos0 : undefined) ??
       (req?.query?.pos0 !== undefined ? req.query.pos0 : undefined);
 
-    const pos0 = Number.parseInt(String(pos0raw).trim(), 10);
-    if (!Number.isFinite(pos0) || pos0 < 0) {
-      return res.status(400).json({ ok: false, error: 'Missing/invalid pos0' });
-    }
+    const pos0 = Number.parseInt(String(pos0raw ?? '').trim(), 10);
 
     // Optional: accept file for sanity checking
     const file = String(req?.body?.file || req?.query?.file || '').trim();
 
-    // Optional safety: confirm pos0 still points to expected file
-    if (file) {
+    // Require at least one identifier
+    const haveSongId = Number.isFinite(songid) && songid >= 0;
+    const havePos0   = Number.isFinite(pos0) && pos0 >= 0;
+
+    if (!haveSongId && !havePos0) {
+      return res.status(400).json({ ok: false, error: 'Missing/invalid songid (preferred) or pos0 (fallback)' });
+    }
+
+    // Optional safety: if file was provided and we have songid, confirm it still points to expected file
+    if (file && haveSongId) {
       try {
-        const info = await mpdPlaylistInfoByPos(pos0);
+        const info = await mpdPlaylistInfoById(songid);   // you already have this helper
         const actual = String(info?.file || '').trim();
 
         if (actual && actual !== file) {
-          console.log('[queue/advance] pos mismatch, priming only', {
-            pos0,
+          console.log('[queue/advance] id mismatch, priming only', {
+            songid,
             tokenFile: file,
             mpdFile: actual,
           });
 
-          // Do NOT delete if MPD already moved; just re-prime
           await mpdPrimePlayPause();
 
           return res.json({
             ok: true,
             skippedDelete: true,
-            reason: 'pos-mismatch-primed',
+            reason: 'id-mismatch-primed',
           });
         }
       } catch (e) {
-        console.log('[queue/advance] pos check failed, continuing delete:', e?.message || String(e));
+        console.log('[queue/advance] id check failed, continuing:', e?.message || String(e));
       }
     }
 
-    // 1) Delete finished track (0-based position)
-    await mpdDeletePos0(pos0);
+    // 1) Delete finished track
+    if (haveSongId) {
+      await mpdDeleteId(songid);
+    } else {
+      // fallback
+      await mpdDeletePos0(pos0);
+    }
 
     // 2) Prime MPD so a new "current" is selected (avoid STOP/empty)
     await mpdPrimePlayPause();
@@ -1541,8 +1563,8 @@ app.post('/queue/advance', async (req, res) => {
     const song = await fetchJson(`${MOODE_BASE_URL}/command/?cmd=get_currentsong`);
     const statusRaw = await fetchJson(`${MOODE_BASE_URL}/command/?cmd=status`);
 
-    const songpos = moodeValByKey(statusRaw, 'song');
-    const songid  = moodeValByKey(statusRaw, 'songid');
+    const songposNow = moodeValByKey(statusRaw, 'song');
+    const songidNow  = moodeValByKey(statusRaw, 'songid');
 
     return res.json({
       ok: true,
@@ -1551,11 +1573,10 @@ app.post('/queue/advance', async (req, res) => {
         title: decodeHtmlEntities(song.title || ''),
         artist: decodeHtmlEntities(song.artist || ''),
         album: decodeHtmlEntities(song.album || ''),
-        songpos: String(songpos || '').trim(),
-        songid: String(songid || '').trim(),
+        songpos: String(songposNow || '').trim(),
+        songid: String(songidNow || '').trim(),
       },
     });
-
   } catch (e) {
     console.error('/queue/advance error:', e?.message || String(e));
     return res.status(500).json({ ok: false, error: e?.message || String(e) });
