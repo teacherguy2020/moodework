@@ -73,6 +73,7 @@ const ART_320_PATH = path.join(ART_DIR, 'current_320.jpg');
 const ART_640_PATH = path.join(ART_DIR, 'current_640.jpg');
 const ART_BG_PATH  = path.join(ART_DIR, 'current_bg_640_blur.jpg');
 
+
 /* =========================
  * Express
  * ========================= */
@@ -609,6 +610,13 @@ function mpdQueryRaw(command, timeoutMs = 3000) {
 
     sock.on('end', () => finish());
   });
+}
+
+async function mpdDeletePos0(pos0) {
+  const n = Number(pos0);
+  if (!Number.isFinite(n) || n < 0) throw new Error('bad pos0');
+  await mpdQueryRaw(`delete ${n}`);
+  return true;
 }
 
 async function mpdPlaylistInfoById(songid) {
@@ -1475,6 +1483,82 @@ app.post('/mpd/prime', async (req, res) => {
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: e?.message || String(e) });
+  }
+});
+
+app.post('/queue/advance', async (req, res) => {
+  try {
+    // Protect it (same shared secret as /track)
+    if (!requireTrackKey(req, res)) return;
+
+    // Accept pos0 from JSON body OR querystring
+    const pos0raw =
+      (req?.body?.pos0 !== undefined ? req.body.pos0 : undefined) ??
+      (req?.query?.pos0 !== undefined ? req.query.pos0 : undefined);
+
+    const pos0 = Number.parseInt(String(pos0raw).trim(), 10);
+    if (!Number.isFinite(pos0) || pos0 < 0) {
+      return res.status(400).json({ ok: false, error: 'Missing/invalid pos0' });
+    }
+
+    // Optional: accept file for sanity checking
+    const file = String(req?.body?.file || req?.query?.file || '').trim();
+
+    // Optional safety: confirm pos0 still points to expected file
+    if (file) {
+      try {
+        const info = await mpdPlaylistInfoByPos(pos0);
+        const actual = String(info?.file || '').trim();
+
+        if (actual && actual !== file) {
+          console.log('[queue/advance] pos mismatch, priming only', {
+            pos0,
+            tokenFile: file,
+            mpdFile: actual,
+          });
+
+          // Do NOT delete if MPD already moved; just re-prime
+          await mpdPrimePlayPause();
+
+          return res.json({
+            ok: true,
+            skippedDelete: true,
+            reason: 'pos-mismatch-primed',
+          });
+        }
+      } catch (e) {
+        console.log('[queue/advance] pos check failed, continuing delete:', e?.message || String(e));
+      }
+    }
+
+    // 1) Delete finished track (0-based position)
+    await mpdDeletePos0(pos0);
+
+    // 2) Prime MPD so a new "current" is selected (avoid STOP/empty)
+    await mpdPrimePlayPause();
+
+    // 3) Return a fresh now-playing snapshot (lightweight)
+    const song = await fetchJson(`${MOODE_BASE_URL}/command/?cmd=get_currentsong`);
+    const statusRaw = await fetchJson(`${MOODE_BASE_URL}/command/?cmd=status`);
+
+    const songpos = moodeValByKey(statusRaw, 'song');
+    const songid  = moodeValByKey(statusRaw, 'songid');
+
+    return res.json({
+      ok: true,
+      nowPlaying: {
+        file: song.file || '',
+        title: decodeHtmlEntities(song.title || ''),
+        artist: decodeHtmlEntities(song.artist || ''),
+        album: decodeHtmlEntities(song.album || ''),
+        songpos: String(songpos || '').trim(),
+        songid: String(songid || '').trim(),
+      },
+    });
+
+  } catch (e) {
+    console.error('/queue/advance error:', e?.message || String(e));
+    return res.status(500).json({ ok: false, error: e?.message || String(e) });
   }
 });
 
