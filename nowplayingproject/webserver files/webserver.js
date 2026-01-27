@@ -16,12 +16,12 @@ app.use(express.urlencoded({ extended: false }));
 // ------------------------
 // Config
 // ------------------------
-const MOODE_HOST = '10.0.0.254';
+const MOODE_HOST = 'YOUR MOODE IP NO HTTP';
 const MOODE_PATH = '/command/?cmd=';
 
 // Set this in the environment when starting node:
 // export WEB_API_KEY='long-random-string'
-const API_KEY = process.env.WEB_API_KEY || '';
+const API_KEY = process.env.WEB_API_KEY || 'CREATE AND USE TRACK KEY HERE';
 
 // ------------------------
 // Simple API auth middleware
