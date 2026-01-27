@@ -360,4 +360,4 @@ Why This Architecture?
 	•	Alexa stays sane
 
 ⸻
-![Display](./IMG_6007.jpeg)
+![Display](./now-playing.jpeg)
