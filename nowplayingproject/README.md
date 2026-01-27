@@ -15,8 +15,8 @@ across multiple Raspberry Pi nodes for **stability, performance, and flexibility
 
 ## One-Line Mental Model (Important)
 
-- **Port 3000 = data** (JSON, logic, metadata, art generation)
-- **Port 8000 = pixels** (HTML / JS only)
+- Web Host Pi **Port 3000 = data** (JSON, logic, metadata, art generation)
+- Web Host Pi **Port 8000 = pixels** (HTML / JS only)
 
 > The display never talks directly to moOde.  
 > It only talks to the API node.
