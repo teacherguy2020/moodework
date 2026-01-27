@@ -1,7 +1,3 @@
-Absolutely — below is a cleanly revised, drop-in README.md, fully in Markdown, incorporating the recent work and the additions we discussed. I’ve been careful to preserve your voice and structure, while adding clarity where the system has real nuance.
-
-You can paste this directly into GitHub.
-
 ⸻
 
 
@@ -46,7 +42,7 @@ This project intentionally separates **audio playback**, **metadata processing**
 │ • index1080.html       │
 │ • script1080.js        │
 └────────────────────────┘
-
+```
 
 ⸻
 
@@ -58,7 +54,7 @@ The display never talks directly to moOde.
 It only talks to Pi #2.
 
 ⸻
-
+```
 Playback Modes & Behavior
 
 Mode	Source	Album Art (Primary → Fallback)	Ratings	Progress	Notes
@@ -68,7 +64,7 @@ UPnP	MPD stream	Resolved local file → coverart.php	❌ No	❌ No	Treated as st
 AirPlay	Shairplay	aplmeta cover → API proxy / fallback	❌ No	❌ No	LAN-only raw art
 
 This behavior is intentional and enforced consistently by both the API and UI.
-
+```
 ⸻
 
 Roles of Each Raspberry Pi
@@ -333,12 +329,3 @@ Troubleshooting (Common)
 	•	Prefer per-track URLs over “current” art
 
 ⸻
-
-
-—
-
-If you want, next passes could be:
-- a **30-second Quick Start** at the top
-- or splitting Alexa into its own `ALEXA.md`
-
-But as-is, this README now fully matches the sophistication of the system you built.
