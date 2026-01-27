@@ -119,12 +119,14 @@ Example JSON output while a track is playing on moOde:
 ```
 {"artist":"Alison Krauss","title":"I Give You to His Heart","album":"A Hundred Miles or More: A Collection","file":"USB/SamsungMoode/Ondesoft/A Hundred Miles or More A Collection/AlisonKrauss-AHundredMilesorMoreACollection-13-IGiveYoutoHisHeart.flac","songpos":"23","songid":"54650","albumArtUrl":"http://10.0.0.254/coverart.php/USB%2FSamsungMoode%2FOndesoft%2FA%20Hundred%20Miles%20or%20More%20A%20Collection%2FAlisonKrauss-AHundredMilesorMoreACollection-13-IGiveYoutoHisHeart.flac","aplArtUrl":"https://moode.brianwis.com/art/current_320.jpg","altArtUrl":"","radioAlbum":"","radioYear":"","radioLabel":"","radioComposer":"","radioWork":"","radioPerformers":"","state":"play","elapsed":177,"duration":269,"percent":66,"year":"2007","label":"New Rounder","producer":"","personnel":["Alison Krauss (lead vocals)"],"encoded":"FLAC 24/44.1 kHz, 2ch","bitrate":"1.472 Mbps","outrate":"PCM 32/44.1 kHz, 2ch","volume":"0","mute":"0","track":"13","date":"200704","isStream":false,"isAirplay":false,"streamKind":"","isUpnp":false,"isFavorite":false}
 ```
+This JSON provides everything needed for the webserver and Alexa skill to function.
 
 ### Public (No Authentication)
 
 | Method | Endpoint | Purpose |
 |------|---------|---------|
-| GET | `/now-playing` | Canonical playback state |
+| GET | `/now-playing` | Current track's data |
+| GET | `/next-up` | Teaser for browser |
 | GET | `/art/current_320.jpg` | Current track artwork |
 | GET | `/art/current_bg_640_blur.jpg` | Blurred background artwork |
 
