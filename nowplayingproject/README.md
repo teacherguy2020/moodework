@@ -1,6 +1,6 @@
 # moOde “Now Playing”
 
-A distributed, high-performance **Now Playing** display and control system for **moOde Audio Player**, designed for a dedicated full-screen 1080p display — but viewable from **any device on your network**.
+A distributed, high-performance **Now Playing** display and control system for **moOde Audio Player**, designed for a dedicated full-screen 1080p display — but viewable from **any device on your network**. (could use some help creating various @media views).
 
 This project intentionally separates:
 
