@@ -14,7 +14,7 @@ across multiple Raspberry Pi nodes for **stability, performance, and flexibility
 
 ---
 
-## One-Line Mental Model (Important)
+## One-Line Mental Model
 
 - Web Host Pi **Port 3000 = data** (JSON, logic, metadata, art generation)
 - Web Host Pi **Port 8000 = pixels** (HTML / JS only)
@@ -25,7 +25,7 @@ across multiple Raspberry Pi nodes for **stability, performance, and flexibility
 ---
 
 System Architecture (Three Pis)
-
+```
 ┌────────────────────────┐
 │ Pi #1 — moOde Player   │
 │ (Audio playback)       │
@@ -42,9 +42,9 @@ System Architecture (Three Pis)
 │ (Logic + Metadata)     │
 │                        │
 │ - moode-nowplaying-api │  ← Port 3000
-│ - Artwork processing  │
-│ - Metadata caching    │
-│ - Static web server   │  ← Port 8000
+│ - Artwork processing   │
+│ - Metadata caching     │
+│ - Static web server    │  ← Port 8000
 └─────────┬──────────────┘
 │ HTTP (HTML/JS)
 ▼
@@ -56,7 +56,7 @@ System Architecture (Three Pis)
 │ - index1080.html       │
 │ - script1080.js        │
 └────────────────────────┘
-
+```
 ---
 
 ## Roles of Each Raspberry Pi
