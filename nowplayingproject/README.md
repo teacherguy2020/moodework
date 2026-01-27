@@ -129,16 +129,16 @@ Playback Modes & Behavior
 In all modes, the web display strives for a consistent presentation of metadata
 ```
 ⸻
-
+```
 Project Files
 
-File	Runs On	Purpose
-moode-nowplaying-api.mjs	Pi #2	Aggregates playback + metadata into JSON
-index1080.html	Pi #2	Fullscreen 1080p UI
-script1080.js	Pi #2	UI logic, polling, animation
-images/*.png	Pi #2	Mode icons / fallback art
-
-
+| File                     | Runs On | Purpose                                  |
+|--------------------------|---------|-------------------------------------------|
+| moode-nowplaying-api.mjs | Pi #2   | Aggregates playback + metadata into JSON  |
+| index1080.html           | Pi #2   | Fullscreen 1080p UI                       |
+| script1080.js            | Pi #2   | UI logic, polling, animation              |
+| images/*.png             | Pi #2   | Mode icons / fallback artwork             |
+```
 ⸻
 
 Networking Requirements
