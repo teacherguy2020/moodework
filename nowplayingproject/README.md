@@ -1,18 +1,28 @@
-Absolutely — below is a cleanly revised, drop-in README.md, fully in Markdown, incorporating the recent work and the additions we discussed. I’ve been careful to preserve your voice and structure, while adding clarity where the system has real nuance.
-
-You can paste this directly into GitHub.
-
-⸻
-
-
 # moOde “Now Playing”
 
-A distributed, high-performance **Now Playing** display system for **moOde Audio Player**, designed for a dedicated full-screen 1080p display (or viewable from any device on your network).
+A distributed, high-performance **Now Playing** display and control system for **moOde Audio Player**, designed for a dedicated full-screen 1080p display — but viewable from **any device on your network**.
 
-This project intentionally separates **audio playback**, **metadata processing**, and **display rendering** across three Raspberry Pi devices for stability, performance, and flexibility.
+This project intentionally separates:
 
-—
+- **Audio playback**
+- **Metadata processing**
+- **UI rendering**
+- **(Optionally) Alexa voice control**
 
+across multiple Raspberry Pi nodes for **stability, performance, and flexibility**.
+
+---
+
+## One-Line Mental Model (Important)
+
+- **Port 3000 = data** (JSON, logic, metadata, art generation)
+- **Port 8000 = pixels** (HTML / JS only)
+
+> The display never talks directly to moOde.  
+> It only talks to the API node.
+
+---
+```
 ## System Architecture (Three Pis)
 
 ```text
@@ -31,10 +41,10 @@ This project intentionally separates **audio playback**, **metadata processing**
 │ Pi #2 — API + Web Host │
 │ (Logic + Metadata)     │
 │                        │
-│ • moode-nowplaying-api │  ← Port 3000 (JSON API)
-│ • metaflac             │
-│ • Metadata caching     │
-│ • Static web server    │  ← Port 8000 (HTML / JS)
+│ • moode-nowplaying-api │  ← Port 3000
+│ • Artwork processing  │
+│ • Metadata caching    │
+│ • Static web server   │  ← Port 8000
 └─────────┬──────────────┘
           │ HTTP (HTML/JS)
           ▼
@@ -47,28 +57,7 @@ This project intentionally separates **audio playback**, **metadata processing**
 │ • script1080.js        │
 └────────────────────────┘
 
-
-⸻
-
-One-Line Mental Model (Important)
-	•	Port 3000 = data (JSON)
-	•	Port 8000 = pixels (HTML / JS)
-
-The display never talks directly to moOde.
-It only talks to Pi #2.
-
-⸻
-
-Playback Modes & Behavior
-
-Mode	Source	Album Art (Primary → Fallback)	Ratings	Progress	Notes
-Local	MPD file	Embedded → folder → coverart.php	✅ Yes	✅ Yes	Full metadata + stickers
-Radio	Stream URL	iTunes lookup → station logo	❌ No	❌ No	Album/year from iTunes
-UPnP	MPD stream	Resolved local file → coverart.php	❌ No	❌ No	Treated as stream
-AirPlay	Shairplay	aplmeta cover → API proxy / fallback	❌ No	❌ No	LAN-only raw art
-
-This behavior is intentional and enforced consistently by both the API and UI.
-
+```
 ⸻
 
 Roles of Each Raspberry Pi
@@ -77,15 +66,15 @@ Pi #1 — moOde Player (Audio Only)
 	•	Runs moOde Audio Player
 	•	Handles all audio playback
 	•	Hosts the music library
-	•	Exposes moOde APIs used by Pi #2:
+	•	Exposes:
 	•	/command/?cmd=get_currentsong
 	•	/command/?cmd=status
-	•	/var/local/www/aplmeta.txt (AirPlay metadata/art pipeline output)
+	•	/var/local/www/aplmeta.txt (AirPlay metadata + cover output)
 
 This Pi runs no custom code for this project.
 It just moOdes.
 
-If Pi #2 needs access to local files, use Samba or NFS, or attach storage directly.
+If Pi #2 needs file access, use USB, Samba, or NFS.
 
 ⸻
 
@@ -94,56 +83,72 @@ Pi #2 — API + Web Server (The Brains)
 This is where all logic lives.
 
 Responsibilities:
-	•	Queries Pi #1 for playback state
-	•	Reads deep metadata directly from audio files
-	•	Normalizes output across:
+	•	Query moOde for playback state
+	•	Read deep metadata from local audio files
+	•	Normalize output for:
 	•	local files
 	•	radio streams
 	•	UPnP
 	•	AirPlay
-	•	Caches metadata and artwork
-	•	Serves:
+	•	Resolve and cache album artwork
+	•	Serve:
 	•	JSON API → Port 3000
 	•	Static UI → Port 8000
+	•	(Optionally) act as the Alexa integration endpoint
 
 Key components:
 	•	moode-nowplaying-api.mjs (Node / Express)
 	•	metaflac
-	•	Static web server (no backend logic)
+	•	Static web server
 
 ⸻
 
 Pi #3 — Display / Kiosk (Optional)
 	•	Connected to a TV or monitor
 	•	Runs Chromium in kiosk mode
-	•	Loads UI from Pi #2:
+	•	Loads the UI from Pi #2:
 
 http://<PI2_IP>:8000/index1080.html
 
 No metadata logic.
 No audio.
-No local files required.
+No local files.
 
-You may skip Pi #3 entirely and view the display from any device.
+You can skip Pi #3 entirely and view the display from any browser.
 
+⸻
+```
+Playback Modes & Behavior
+
+| Mode    | Artwork Quality       | Ratings | Progress | Notes                              |
+|---------|-----------------------|---------|----------|------------------------------------|
+| Local   | Strongest             | ✅ Yes  | ✅ Yes   | Deep file metadata + MPD stickers  |
+| Radio   | Strong                | Hidden  | Hidden   | iTunes art- album/year text        |
+| UPnP    | Moderate              | Hidden  | Hidden   | Treated as stream                  |
+| AirPlay | Strong                | Hidden  | Hidden   | LAN art + HTTPS-safe fallback      |
+|---------|-----------------------|---------|----------|------------------------------------|
+In all modes, the web display strives for a consistent presentation of metadata
+```
 ⸻
 
 Project Files
 
-File	Runs on	Purpose
-moode-nowplaying-api.mjs	Pi #2	Aggregates moOde + metadata into JSON
-index1080.html	Pi #2	1080p fullscreen UI
-script1080.js	Pi #2	UI logic (polling, art, progress, cache)
-images/airplay.png	Pi #2	Branding / fallback art
+File	Runs On	Purpose
+moode-nowplaying-api.mjs	Pi #2	Aggregates playback + metadata into JSON
+index1080.html	Pi #2	Fullscreen 1080p UI
+script1080.js	Pi #2	UI logic, polling, animation
+images/*.png	Pi #2	Mode icons / fallback art
 
 
 ⸻
 
 Networking Requirements
-	•	All Pis must be on the same LAN
-	•	Optional Alexa integration requires:
-	•	HTTPS
-	•	Public domain or secure tunnel to Pi #2
+
+All Pis must be on the same LAN.
+
+If Alexa integration is enabled:
+	•	Pi #2 must also be reachable over HTTPS from the internet
+	•	Use a domain you control or a secure tunnel
 
 ⸻
 
@@ -156,43 +161,42 @@ sudo apt install -y nodejs npm flac
 
 Verify:
 
-node —version
-metaflac —version
+node --version
+metaflac --version
 
 
 ⸻
 
 Music Library Access (Important)
 
-Pi #2 must have read access to the same music files used by moOde.
+Pi #2 must have read access to the same files moOde plays.
 
-Common approaches:
+Common setups:
 	•	USB drive attached to Pi #2
 	•	Samba / NFS mount from Pi #1
 
-The API maps moOde paths (e.g. USB/Drive/...) to Pi #2 paths (e.g. /mnt/Drive/...).
-Configure this mapping in moode-nowplaying-api.mjs.
+Paths reported by moOde (e.g. USB/Drive/...) must be mapped to Pi #2 mount paths in moode-nowplaying-api.mjs.
 
 ⸻
 
-Configure IP Addresses
+Configure IPs
 
 Edit moode-nowplaying-api.mjs:
 	•	MOODE_BASE_URL → http://<PI1_IP>
-	•	Bind/listen address → <PI2_IP>
+	•	Bind address → <PI2_IP>
 
 ⸻
 
-Start API Server (Port 3000)
+Start the API (Port 3000)
 
 Manual:
 
 node moode-nowplaying-api.mjs
 
-With PM2 (recommended):
+Recommended (PM2):
 
 sudo npm install -g pm2
-pm2 start moode-nowplaying-api.mjs —name moode-now-playing
+pm2 start moode-nowplaying-api.mjs --name moode-now-playing
 pm2 save
 
 Test:
@@ -202,143 +206,158 @@ curl http://<PI2_IP>:3000/now-playing | jq
 
 ⸻
 
-Web Server (Port 8000)
+Static Web Server (Port 8000)
 
-Recommended Static Server
+The UI server serves static files only.
+
+Recommended:
 
 python3 -m http.server 8000
 
-Why:
-	•	near-zero CPU
-	•	no configuration
-	•	stable for kiosk use
+This is:
+	•	Stable
+	•	Low-CPU
+	•	Perfect for kiosks
 
 Test:
 
 curl http://<PI2_IP>:8000/index1080.html
 
-⚠️ Do not serve the UI from port 3000
-Port 3000 is a JSON API only. Subtle browser failures will occur.
 
 ⸻
 
-Viewing the Display
-
-Any device:
-
-http://<PI2_IP>:8000/index1080.html
-
-Chromium kiosk:
+Display / Kiosk Mode
 
 chromium \
-  —kiosk \
-  —disable-infobars \
-  —noerrdialogs \
-  —disable-session-crashed-bubble \
+  --kiosk \
+  --disable-infobars \
+  --noerrdialogs \
+  --disable-session-crashed-bubble \
   http://<PI2_IP>:8000/index1080.html
 
-Hide mouse:
+Hide cursor:
 
 unclutter -idle 0 &
 
 
 ⸻
 
-AirPlay Artwork (Important)
+Optional: Alexa Skill Integration (First-Class Feature)
 
-AirPlay metadata and cover art are produced by moOde via:
+This project includes a fully supported Alexa Skill integration that allows Echo devices to:
+	•	Play the current moOde track
+	•	Answer “what’s playing?”
+	•	Pause / resume
+	•	Advance tracks
+	•	Stay synchronized with MPD
 
-/var/local/www/aplmeta.txt
+Key Principle
 
-Behavior:
-	•	LAN access: UI may load AirPlay cover images directly
-	•	Public HTTPS access: raw AirPlay URLs are blocked (mixed content)
+Alexa never talks directly to moOde.
+All coordination goes through Pi #2.
 
-In public mode:
-	•	Art is proxied and normalized via Pi #2 when possible
-	•	Otherwise the UI falls back gracefully
-
-This behavior is intentional.
-
-⸻
-
-MPD Stickers (Required for Track Ratings)
-
-Ratings are stored using MPD stickers.
-
-Why:
-	•	Persistent
-	•	File-scoped
-	•	No audio file modification
-
-Required MPD config:
-
-sticker_file “/var/lib/mpd/sticker.sql”
-
-Verify:
-
-ls -l /var/lib/mpd/sticker.sql
-
-Sticker key used:
-
-rating (0–5)
-
-Examples:
-
-mpc sticker set song “/path/file.flac” rating 4
-mpc sticker get song “/path/file.flac” rating
-
-Ratings are automatically disabled for:
-	•	Radio
-	•	UPnP
-	•	AirPlay
-
-⭐ Audio files are never modified.
+This keeps:
+	•	MPD authoritative
+	•	Alexa stateless
+	•	Queue state correct
+	•	Art + metadata aligned everywhere
 
 ⸻
 
-Why Three Pis?
+Alexa Architecture
 
-Stability
-Audio playback isolated from UI crashes
+Echo Device
+    │
+    ▼
+AWS Lambda (Alexa Skill)
+    │ HTTPS
+    ▼
+Pi #2 — Node API
+    │
+    ▼
+Pi #1 — moOde / MPD
 
-Performance
-No JS load on moOde Pi
-
-Flexibility
-UI and display can reboot independently
 
 ⸻
 
-Tested With
-	•	moOde Audio Player 8.x
-	•	Raspberry Pi 3B+, 4, 5
-	•	Chromium kiosk (ARM)
-	•	Safari (iOS)
-	•	Chrome (desktop)
-	•	Local FLAC, Radio, UPnP, AirPlay
+Required API Endpoints (Pi #2)
+
+Public
+	•	GET /now-playing
+
+Key-Protected
+	•	GET /track?file=<mpd_file>&k=<key>[&t=<seconds>]
+	•	POST /queue/advance?k=<key>&pos0=<pos0>[&file=<file>]
 
 ⸻
 
-Troubleshooting (Common)
-	•	Alexa plays nothing
-	•	Verify HTTPS
-	•	Verify /track endpoint
-	•	Verify key
-	•	Queue out of sync
-	•	Confirm PlaybackStarted calls /queue/advance
-	•	Check dedup timing
-	•	Missing art on Echo
-	•	Some devices require audioItem.metadata.art.sources
-	•	Prefer per-track URLs over “current” art
+Token Design (Critical)
+
+Tokens are base64url JSON:
+
+{
+  "file": "USB/Drive/Album/track.flac",
+  "pos0": 128
+}
+
+Used to:
+	•	Deduplicate Alexa events
+	•	Detect resume vs fresh play
+	•	Carry MPD queue position
 
 ⸻
 
+HTTPS Requirement
 
-—
+Alexa requires HTTPS audio URLs.
 
-If you want, next passes could be:
-- a **30-second Quick Start** at the top
-- or splitting Alexa into its own `ALEXA.md`
+Typical base:
 
-But as-is, this README now fully matches the sophistication of the system you built.
+https://moode.YOURDOMAIN.com
+
+
+⸻
+
+Lambda Environment Variables
+
+Required:
+	•	MOODE_API_BASE
+	•	TRACK_KEY
+
+Optional:
+	•	META_STABLE_GAP_MS
+	•	NEXT_ENQUEUE_GAP_MS
+
+⸻
+
+MPD Stickers (Required for Ratings)
+
+Ratings use MPD stickers, not file tags.
+
+Required config:
+
+sticker_file "/var/lib/mpd/sticker.sql"
+
+Ratings:
+	•	Apply only to local files
+	•	Never modify audio files
+	•	Are hidden automatically for radio / AirPlay
+
+⸻
+
+Common Pitfalls
+	•	Don’t open index1080.html via file://
+	•	Don’t serve UI from port 3000
+	•	Don’t point UI directly at moOde
+	•	Don’t expect ratings on streams
+
+⸻
+
+Why This Architecture?
+	•	Audio isolated from UI crashes
+	•	No heavy JS on moOde Pi
+	•	Displays can reboot independently
+	•	Alexa stays sane
+
+⸻
+![Display](./IMG_6007.jpeg)
