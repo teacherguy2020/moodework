@@ -40,20 +40,20 @@ const execFileP = promisify(execFile);
 
 const PORT = Number(process.env.PORT || '3000');
 
-const MOODE_BASE_URL = process.env.MOODE_BASE_URL || 'http://REPLACE WITH YOUR MOODE IP ADDRESS';
-const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'https://moode.brianwis.com';
+const MOODE_BASE_URL = process.env.MOODE_BASE_URL || 'http://YOUR MOODE IP';
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'https://moode.YOUR PUBLIC DOMAIN.com';
 
-const LOCAL_ADDRESS = process.env.LOCAL_ADDRESS || 'REPLACE WITH YOUR SERVER IP NO HTTP';
+const LOCAL_ADDRESS = process.env.LOCAL_ADDRESS || 'YOUR WEBSERVER IP NO HTTP';
 
-const MPD_HOST = process.env.MPD_HOST || 'REPLACE WITH MOODE IP NO HTTP';
+const MPD_HOST = process.env.MPD_HOST || 'YOUR MOODE IP NO HTTP';
 const MPD_PORT = Number(process.env.MPD_PORT || '6600');
 
-const MOODE_USB_PREFIX = process.env.MOODE_USB_PREFIX || 'USB/YOURDRIVEMOUNTNAME/';
-const PI4_MOUNT_BASE = process.env.PI4_MOUNT_BASE || '/mnt/SamsungMoode';
+const MOODE_USB_PREFIX = process.env.MOODE_USB_PREFIX || 'PATH/TO MUSIC/';
+const PI4_MOUNT_BASE = process.env.PI4_MOUNT_BASE || '/mnt/YOUR DRIVE';
 
 const METAFLAC = process.env.METAFLAC || '/usr/bin/metaflac';
 
-const TRACK_KEY = process.env.TRACK_KEY || 'YOUR TRACK KEY';
+const TRACK_KEY = process.env.TRACK_KEY || 'CREATE A TRACK KEY';
 const ENABLE_ALEXA = String(process.env.ENABLE_ALEXA || '').trim() === '1';
 const TRANSCODE_TRACKS = String(process.env.TRANSCODE_TRACKS || '0').trim() === '1';
 const TRACK_CACHE_DIR = process.env.TRACK_CACHE_DIR || '/tmp/moode-track-cache';
@@ -72,7 +72,6 @@ const ART_DIR = '/home/brianwis/album_art/art'; // adjust to your real static di
 const ART_320_PATH = path.join(ART_DIR, 'current_320.jpg');
 const ART_640_PATH = path.join(ART_DIR, 'current_640.jpg');
 const ART_BG_PATH  = path.join(ART_DIR, 'current_bg_640_blur.jpg');
-
 
 /* =========================
  * Express
@@ -305,7 +304,7 @@ async function mpcCmd(args) {
 
 async function mpdPrimePlayPause() {
   await mpcCmd(['play']);
-  await sleep(250);
+  await sleep(200);
   await mpcCmd(['stop']);
   return true;
 }
@@ -482,27 +481,18 @@ async function getDeepMetadataCached(mpdFile) {
 /* =========================
  * Art
  * ========================= */
-
 async function buildArtDerivatives(rawUrl) {
-  const r = await fetch(rawUrl, { cache: 'no-store' });
+  const r = await fetch(rawUrl, { agent: agentForUrl(rawUrl), cache: 'no-store' });
   if (!r.ok) throw new Error(`art fetch failed: ${r.status}`);
   const input = Buffer.from(await r.arrayBuffer());
 
-  // 320: UI thumb
+  // keep variable name out320 (even though it's 640 now)
   const out320 = await sharp(input)
-    .rotate()
-    .resize(320, 320, { fit: 'cover' })
-    .jpeg({ quality: 82, mozjpeg: true })
-    .toBuffer();
-
-  // 640: MAIN foreground art (sharp)
-  const out640 = await sharp(input)
     .rotate()
     .resize(640, 640, { fit: 'cover' })
     .jpeg({ quality: 85, mozjpeg: true })
     .toBuffer();
 
-  // 640: background (blurred)
   const outBG = await sharp(input)
     .rotate()
     .resize(640, 640, { fit: 'cover' })
@@ -510,9 +500,8 @@ async function buildArtDerivatives(rawUrl) {
     .jpeg({ quality: 70, mozjpeg: true })
     .toBuffer();
 
-  return { out320, out640, outBG };
+  return { out320, outBG };
 }
-
 // =========================
 // Album art cache state
 // =========================
@@ -525,16 +514,15 @@ async function updateArtCacheIfNeeded(rawArtUrl) {
 
   await ensureDir(ART_DIR);
 
-  const { out320, out640, outBG } = await buildArtDerivatives(rawArtUrl);
+  // buildArtDerivatives() returns { out320, outBG } where out320 is actually 640x640 in your code
+  const { out320, outBG } = await buildArtDerivatives(rawArtUrl);
 
-  await writeFileAtomic(ART_320_PATH, out320);
-  await writeFileAtomic(ART_640_PATH, out640);
+  await writeFileAtomic(ART_640_PATH, out320);
   await writeFileAtomic(ART_BG_PATH,  outBG);
 
   lastArtKeyBuilt = key;
-  console.log('[art] rebuilt', key);
+  console.log('[art] rebuilt (640)', key);
 }
-
 
 /* =========================
  * MPD protocol (TCP) resolver
@@ -822,6 +810,77 @@ async function lookupItunesFirst(artist, title, debug = false) {
   }
 }
 
+async function pickBestArtUrlForCurrentSong({ preferItunesForRadio = true } = {}) {
+  const song = await fetchJson(`${MOODE_BASE_URL}/command/?cmd=get_currentsong`);
+  const statusRaw = await fetchJson(`${MOODE_BASE_URL}/command/?cmd=status`);
+
+  const file = String(song.file || '').trim();
+  const stream = isStreamPath(file);
+  const airplay = isAirplayFile(file) || String(song.encoded || '').toLowerCase() === 'airplay';
+
+  // --- BRAKES: do NOT change AirPlay behavior right now ---
+  if (airplay) {
+    // What you currently do: rely on coverurl if present, else nothing.
+    if (song.coverurl) return normalizeCoverUrl(song.coverurl, MOODE_BASE_URL);
+    return '';
+  }
+
+  // Local file => always correct
+  if (!stream && file) {
+    return `${MOODE_BASE_URL}/coverart.php/${encodeURIComponent(file)}`;
+  }
+
+  // Stream handling (radio vs upnp)
+  if (stream) {
+    const streamKind = String(getStreamKind(file) || '').trim();
+
+    // UPnP: keep your existing resolver behavior (already working)
+    if (streamKind === 'upnp') {
+      const songpos = String(moodeValByKey(statusRaw, 'song') || '').trim();
+      const songid  = String(moodeValByKey(statusRaw, 'songid') || '').trim();
+
+      const realFile = await resolveLibraryFileForStream({
+        songid,
+        songpos,
+        title: song.title || '',
+        artist: song.artist || '',
+        album: song.album || '',
+        track: song.track || '',
+      }, null);
+
+      if (realFile) return `${MOODE_BASE_URL}/coverart.php/${encodeURIComponent(realFile)}`;
+
+      // If resolver fails, fall back to station coverurl if present
+      if (song.coverurl) return normalizeCoverUrl(song.coverurl, MOODE_BASE_URL);
+      return '';
+    }
+
+    // RADIO: iTunes replacement (this is the fix)
+    if (streamKind === 'radio') {
+      if (preferItunesForRadio) {
+        const decodedTitle = decodeHtmlEntities(song.title || '');
+        const parts = decodedTitle.split(' - ').map(s => s.trim()).filter(Boolean);
+
+        // Your existing heuristic: "Artist - Title"
+        if (parts.length >= 2) {
+          const it = await lookupItunesFirst(parts[0], parts.slice(1).join(' - '), false);
+          if (it.url) return it.url;
+        }
+      }
+
+      // If iTunes fails, fall back to station logo
+      if (song.coverurl) return normalizeCoverUrl(song.coverurl, MOODE_BASE_URL);
+      return '';
+    }
+
+    // Unknown stream kind
+    if (song.coverurl) return normalizeCoverUrl(song.coverurl, MOODE_BASE_URL);
+    return '';
+  }
+
+  return '';
+}
+
 /* =========================
  * AirPlay aplmeta.txt
  * ========================= */
@@ -844,6 +903,27 @@ function parseAplmeta(txt) {
 /* =========================
  * Artwork fetch + resize
  * ========================= */
+ 
+ app.get('/art/track_640.jpg', async (req, res) => {
+  try {
+    // Preferred: build coverart from MPD file path
+    const file = String(req.query.file || '').trim();
+    let src = String(req.query.src || '').trim();
+
+    if (file) {
+      src = `${MOODE_BASE_URL}/coverart.php/${encodeURIComponent(file)}`;
+    }
+
+    if (!src) return res.status(400).send('Missing ?file= or ?src=');
+
+    // Fetch bytes (LAN agent if needed), then resize to 640
+    const buf = await fetchMoodeCoverBytes(src);
+    return sendJpeg(res, buf, 640);
+  } catch (e) {
+    console.warn('[art/track_640] failed:', e?.message || String(e));
+    return res.status(404).end();
+  }
+});
 
 async function fetchMoodeCoverBytes(ref) {
   const s = String(ref || '').trim();
@@ -870,6 +950,7 @@ async function sendJpeg(res, buf, max) {
   res.set('Cache-Control', 'no-store');
   res.status(200).send(out);
 }
+
 
 /* =========================
  * Last-good cache for now-playing
@@ -1274,44 +1355,67 @@ app.get('/art/current_320.jpg', async (req, res) => {
     const airplay = isAirplayFile(file) || String(song.encoded || '').toLowerCase() === 'airplay';
 
     let best = '';
-    if (!airplay && !stream && file) {
-      best = `/coverart.php/${encodeURIComponent(file)}`;
-    } else if (stream) {
-      const songpos = String(moodeValByKey(statusRaw, 'song') || '').trim();
-      const songid  = String(moodeValByKey(statusRaw, 'songid') || '').trim();
 
-      const realFile = await resolveLibraryFileForStream({
-        songid,
-        songpos,
-        title: song.title || '',
-        artist: song.artist || '',
-        album: song.album || '',
-        track: song.track || '',
-      }, null);
-
-      if (realFile) best = `/coverart.php/${encodeURIComponent(realFile)}`;
+    // 0) AirPlay => aplmeta cover (moOde writes local file path/url)
+    if (airplay) {
+      best = await getAirplayCoverUrlFromAplmeta(MOODE_BASE_URL);
     }
 
+    // 1) Local file => direct coverart
+    if (!best && !stream && file) {
+      best = `/coverart.php/${encodeURIComponent(file)}`;
+    }
+
+    // 2) Stream
+    if (!best && stream) {
+      // Prefer iTunes alt art for RADIO streams (via your own now-playing payload)
+      try {
+        const np = await fetchJson(`${PUBLIC_BASE_URL}/now-playing`);
+        if (np && np.isStream && String(np.streamKind || '').toLowerCase() === 'radio') {
+          const alt = String(np.altArtUrl || '').trim();
+          if (alt) best = alt; // absolute URL (iTunes)
+        }
+      } catch {}
+
+      // UPnP: try resolve to local file art
+      if (!best) {
+        const songpos = String(moodeValByKey(statusRaw, 'song') || '').trim();
+        const songid  = String(moodeValByKey(statusRaw, 'songid') || '').trim();
+
+        const realFile = await resolveLibraryFileForStream({
+          songid,
+          songpos,
+          title: song.title || '',
+          artist: song.artist || '',
+          album: song.album || '',
+          track: song.track || '',
+        }, null);
+
+        if (realFile) best = `/coverart.php/${encodeURIComponent(realFile)}`;
+      }
+    }
+
+    // 3) Final fallback: moOde coverurl (station logo, etc.)
     if (!best && song.coverurl) best = normalizeCoverUrl(song.coverurl, MOODE_BASE_URL);
     if (!best) return res.status(404).end();
 
     const buf = await fetchMoodeCoverBytes(best);
-    await sendJpeg(res, buf, 320);
+    await sendJpeg(res, buf, 640);
   } catch {
     res.status(404).end();
   }
 });
 
+
 app.get('/art/current_bg_640_blur.jpg', async (req, res) => {
   try {
-    // If the cache file exists, serve it (fast path)
+    // Fast path: serve cached file if present
     if (safeIsFile(ART_BG_PATH)) {
       res.set('Content-Type', 'image/jpeg');
       res.set('Cache-Control', 'no-store');
       return res.status(200).send(await fs.promises.readFile(ART_BG_PATH));
     }
 
-    // Otherwise, fall back to building it from the best available art
     const song = await fetchJson(`${MOODE_BASE_URL}/command/?cmd=get_currentsong`);
     const statusRaw = await fetchJson(`${MOODE_BASE_URL}/command/?cmd=status`);
 
@@ -1320,30 +1424,56 @@ app.get('/art/current_bg_640_blur.jpg', async (req, res) => {
     const airplay = isAirplayFile(file) || String(song.encoded || '').toLowerCase() === 'airplay';
 
     let best = '';
-    if (!airplay && !stream && file) {
-      best = `/coverart.php/${encodeURIComponent(file)}`;
-    } else if (stream) {
-      const songpos = String(moodeValByKey(statusRaw, 'song') || '').trim();
-      const songid  = String(moodeValByKey(statusRaw, 'songid') || '').trim();
 
-      const realFile = await resolveLibraryFileForStream({
-        songid,
-        songpos,
-        title: song.title || '',
-        artist: song.artist || '',
-        album: song.album || '',
-        track: song.track || '',
-      }, null);
-
-      if (realFile) best = `/coverart.php/${encodeURIComponent(realFile)}`;
+    // 0) AirPlay => aplmeta cover
+    if (airplay) {
+      best = await getAirplayCoverUrlFromAplmeta(MOODE_BASE_URL);
     }
 
+    // 1) Local library file
+    if (!best && !stream && file) {
+      best = `/coverart.php/${encodeURIComponent(file)}`;
+    }
+
+    // 2) Streams
+    if (!best && stream) {
+      const streamKind = String(getStreamKind(file) || '').trim(); // 'radio' | 'upnp' | ''
+
+      // 2a) UPnP => resolve to local file if possible
+      if (streamKind === 'upnp') {
+        const songpos = String(moodeValByKey(statusRaw, 'song') || '').trim();
+        const songid  = String(moodeValByKey(statusRaw, 'songid') || '').trim();
+
+        const realFile = await resolveLibraryFileForStream({
+          songid,
+          songpos,
+          title: song.title || '',
+          artist: song.artist || '',
+          album: song.album || '',
+          track: song.track || '',
+        }, null);
+
+        if (realFile) best = `/coverart.php/${encodeURIComponent(realFile)}`;
+      }
+
+      // 2b) RADIO => iTunes replacement first
+      if (!best && streamKind === 'radio') {
+        const decodedTitle = decodeHtmlEntities(song.title || '');
+        const parts = decodedTitle.split(' - ').map(s => s.trim()).filter(Boolean);
+
+        if (parts.length >= 2) {
+          const it = await lookupItunesFirst(parts[0], parts.slice(1).join(' - '), false);
+          if (it && it.url) best = it.url; // absolute https URL
+        }
+      }
+    }
+
+    // 3) Last resort: moOde-provided coverurl (station logo, etc.)
     if (!best && song.coverurl) best = normalizeCoverUrl(song.coverurl, MOODE_BASE_URL);
     if (!best) return res.status(404).end();
 
     const buf = await fetchMoodeCoverBytes(best);
 
-    // build a blurred 640 derivative on the fly
     const outBG = await sharp(buf)
       .rotate()
       .resize(640, 640, { fit: 'cover' })
@@ -1368,7 +1498,6 @@ app.get('/art/current_640.jpg', async (req, res) => {
       return res.status(200).send(await fs.promises.readFile(ART_640_PATH));
     }
 
-    // Fallback: build from current best art
     const song = await fetchJson(`${MOODE_BASE_URL}/command/?cmd=get_currentsong`);
     const statusRaw = await fetchJson(`${MOODE_BASE_URL}/command/?cmd=status`);
 
@@ -1377,24 +1506,51 @@ app.get('/art/current_640.jpg', async (req, res) => {
     const airplay = isAirplayFile(file) || String(song.encoded || '').toLowerCase() === 'airplay';
 
     let best = '';
-    if (!airplay && !stream && file) {
-      best = `/coverart.php/${encodeURIComponent(file)}`;
-    } else if (stream) {
-      const songpos = String(moodeValByKey(statusRaw, 'song') || '').trim();
-      const songid  = String(moodeValByKey(statusRaw, 'songid') || '').trim();
 
-      const realFile = await resolveLibraryFileForStream({
-        songid,
-        songpos,
-        title: song.title || '',
-        artist: song.artist || '',
-        album: song.album || '',
-        track: song.track || '',
-      }, null);
-
-      if (realFile) best = `/coverart.php/${encodeURIComponent(realFile)}`;
+    // 0) AirPlay => aplmeta cover
+    if (airplay) {
+      best = await getAirplayCoverUrlFromAplmeta(MOODE_BASE_URL);
     }
 
+    // 1) Local library file
+    if (!best && !stream && file) {
+      best = `/coverart.php/${encodeURIComponent(file)}`;
+    }
+
+    // 2) Streams
+    if (!best && stream) {
+      const streamKind = String(getStreamKind(file) || '').trim(); // 'radio' | 'upnp' | ''
+
+      // 2a) UPnP => resolve to local file if possible
+      if (streamKind === 'upnp') {
+        const songpos = String(moodeValByKey(statusRaw, 'song') || '').trim();
+        const songid  = String(moodeValByKey(statusRaw, 'songid') || '').trim();
+
+        const realFile = await resolveLibraryFileForStream({
+          songid,
+          songpos,
+          title: song.title || '',
+          artist: song.artist || '',
+          album: song.album || '',
+          track: song.track || '',
+        }, null);
+
+        if (realFile) best = `/coverart.php/${encodeURIComponent(realFile)}`;
+      }
+
+      // 2b) RADIO => iTunes replacement first
+      if (!best && streamKind === 'radio') {
+        const decodedTitle = decodeHtmlEntities(song.title || '');
+        const parts = decodedTitle.split(' - ').map(s => s.trim()).filter(Boolean);
+
+        if (parts.length >= 2) {
+          const it = await lookupItunesFirst(parts[0], parts.slice(1).join(' - '), false);
+          if (it && it.url) best = it.url; // absolute https URL
+        }
+      }
+    }
+
+    // 3) Last resort: moOde-provided coverurl (station logo, etc.)
     if (!best && song.coverurl) best = normalizeCoverUrl(song.coverurl, MOODE_BASE_URL);
     if (!best) return res.status(404).end();
 
@@ -1413,6 +1569,27 @@ app.get('/art/current_640.jpg', async (req, res) => {
     res.status(404).end();
   }
 });
+
+async function getAirplayCoverUrlFromAplmeta(MOODE_BASE_URL) {
+  try {
+    const p = '/var/local/www/aplmeta.txt';
+    const raw = await fs.promises.readFile(p, 'utf8');
+    const parts = String(raw || '').trim().split('~~~');
+
+    // [4] is cover_path_or_url per your print script
+    const cover = String(parts[4] || '').trim();
+    if (!cover) return '';
+
+    // Sometimes includes ?v=... cachebuster; keep it.
+    if (/^https?:\/\//i.test(cover)) return cover;
+
+    // Typically "imagesw/airplay-covers/cover-....jpg?v=..."
+    const rel = cover.replace(/^\/+/, '');
+    return `${MOODE_BASE_URL.replace(/\/+$/, '')}/${rel}`;
+  } catch {
+    return '';
+  }
+}
 
 app.get('/rating', async (req, res) => {
   try {

@@ -1,3 +1,18 @@
+// script1080.js -- DROP-IN (v1.4)
+//
+// Includes:
+// - Double-buffer blurred background crossfade (background-a/background-b)
+// - Boot gating: wait for first bg art, snap it in place, then show UI
+// - Next Up (text + 75x75 art)
+// - Pause screensaver logic
+// - Radio stabilization + classical composer/work formatting
+// - Instrument abbrev expansion
+// - Lossless/HQ badge logic
+//
+// Notes:
+// - After boot, JS owns background-a/background-b opacity.
+// - CSS should NOT force background opacity in body.ready rules.
+
 /* =========================
  * Debug
  * ========================= */
@@ -10,26 +25,26 @@ const dlog = DEBUG ? console.log.bind(console) : () => {};
  * =========================
  *
  * Rules:
- * - When UI is served from https://moode.YOURDOMAINNAME.com:
-
-
+ * - When UI is served from https://moode.brianwis.com:
+ *     • NEVER fetch http://10.0.0.233 (mixed content will be blocked)
+ *     • Use public HTTPS endpoints only
  *
- * - When UI is served on LAN (e.g. http://YOURSERVERIP:8000):
+ * - When UI is served on LAN (e.g. http://10.0.0.233:8000):
  *     • Use direct LAN endpoints for lowest latency
  */
 
 const HOST = location.hostname.replace(/^www\./, '');
-const IS_PUBLIC = (HOST === 'moode.YOURDOMAINNAME.com');
+const IS_PUBLIC = (HOST === 'moode.brianwis.com');
 
 // API (JSON + generated art)
 const API_BASE = IS_PUBLIC
-  ? 'https://moode.YOURDOMAINNAME.com'
-  : 'http://YOURSERVERIP:3000';
+  ? 'https://moode.brianwis.com'
+  : 'http://10.0.0.233:3000';
 
 // Static assets (HTML / JS / CSS / icons)
 const STATIC_BASE = IS_PUBLIC
-  ? 'https://moode.YOURDOMAINNAME.com'
-  : 'http://YOURSERVERIP:8000';
+  ? 'https://moode.brianwis.com'
+  : 'http://10.0.0.233:8000';
 
 // API endpoints
 const NOW_PLAYING_URL = `${API_BASE}/now-playing`;
@@ -110,6 +125,10 @@ function isRadioMode(data) {
   return (data?.isStream === true) && !isUpnpMode(data);
 }
 
+function ratingsAllowedNow() {
+  // ratings only for local files
+  return !pauseMode && !currentIsAirplay && !currentIsStream;
+}
 /* =========================
  * Ratings (MPD stickers via server)
  * ========================= */
@@ -379,6 +398,10 @@ let lastRatingKey = '';
 async function loadCurrentRating() {
   const ratingEl = document.getElementById('ratingStars');
   if (!ratingEl) return;
+  if (!ratingsAllowedNow()) {   // ✅ covers radio too
+    clearStars();
+    return;
+  }  
 
   // 🚫 ratings never apply to radio or AirPlay
   if (currentIsStream || currentIsAirplay) {
@@ -446,7 +469,7 @@ async function setCurrentRating(n) {
 
 function attachRatingsClickHandler() {
   if (!RATINGS_ENABLED) return;
-
+  if (!ratingsAllowedNow() || ratingDisabled) return;
   document.addEventListener('click', (ev) => {
     const t = ev.target;
     if (!t || !t.dataset || !t.dataset.value) return;
@@ -480,9 +503,23 @@ function fetchNowPlaying() {
 
       const isAirplay = data.isAirplay === true;
       const isStream  = data.isStream === true;
+      
+      // ✅ keep rating/favorites logic correct even if updateUI isn't called
+      currentIsAirplay = isAirplay;
+      currentIsStream  = isStream;
+
+      if (isStream || isAirplay) clearStars();  // ✅ immediately hide stars for radio/upnp/airplay
 
       const isUpnp  = isStream && ((data.isUpnp === true) || (String(data.streamKind || '') === 'upnp'));
       const isRadio = isStream && !isUpnp;
+      
+      // Station logo candidate: prefer the "stream logo" (albumArtUrl) not the iTunes art (altArtUrl)
+      const radioLogoUrl = isRadio
+        ? (String(data.albumArtUrl || '').trim() || '')
+        : '';
+
+      // show overlay logo if radio + we actually have a station logo
+      setModeLogo({ isAirplay, isUpnp, isRadio, radioLogoUrl });
 
       if (ENABLE_NEXT_UP && (pauseMode || isAirplay || isStream)) {
         clearNextUpUI();
@@ -498,9 +535,6 @@ function fetchNowPlaying() {
       }
 
       const trackChanged = justResumedFromPause || baseKey !== currentTrackKey;
-
-      // Update bottom-right logo EVERY poll
-      setModeLogo({ isAirplay, isUpnp });
 
       /* =========================
        * Pause / screensaver logic
@@ -643,31 +677,32 @@ function fetchNowPlaying() {
  * Mode logo
  * ========================= */
 
-function setModeLogo({ isAirplay = false, isUpnp = false }) {
+function setModeLogo({ isAirplay = false, isUpnp = false, isRadio = false, radioLogoUrl = '' }) {
   const logoEl = document.getElementById('mode-logo');
   if (!logoEl) return;
 
   let url = '';
 
-  if (isAirplay === true) {
+  if (isAirplay) {
     url = AIRPLAY_ICON_URL;
-  } else if (isUpnp === true) {
+  } else if (isUpnp) {
     url = UPNP_ICON_URL;
+  } else if (isRadio && radioLogoUrl) {
+    url = radioLogoUrl; // station logo
   }
 
   // Nothing to show → fully clear
   if (!url) {
-    if (logoEl.style.display !== 'none') {
-      logoEl.style.display = 'none';
-      logoEl.removeAttribute('src');
-    }
+    logoEl.style.display = 'none';
+    logoEl.removeAttribute('src');
+    logoEl.classList.remove('radio-logo');
     return;
   }
 
-  // Only update src if it actually changed (prevents reload/flicker)
-  if (logoEl.getAttribute('src') !== url) {
-    logoEl.src = url;
-  }
+  logoEl.classList.toggle('radio-logo', !!(isRadio && radioLogoUrl));
+
+  // Only update src if it actually changed
+  if (logoEl.getAttribute('src') !== url) logoEl.src = url;
 
   logoEl.style.display = 'block';
 }
@@ -1204,12 +1239,11 @@ async function toggleFavorite() {
   if (!currentFile || currentIsStream || currentIsAirplay) return;
 
   try {
-    const res = await fetch('http://10.0.0.233:3000/favorites/toggle', {
+    const res = await fetch(`${API_BASE}/favorites/toggle`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ file: currentFile }),
     });
-
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const j = await res.json();
 
@@ -1243,7 +1277,6 @@ function toUiArtUrl(artUrl) {
   return key ? `http://10.0.0.233:8000/art/current_320.jpg?v=${encodeURIComponent(key)}` : '';
 }
 
-
 /* =========================
  * UI update
  * ========================= */
@@ -1253,6 +1286,10 @@ function updateUI(data) {
 
   const isStream  = data.isStream === true;
   const isAirplay = data.isAirplay === true;
+
+  // Identify UPnP vs Radio (radio = stream but not upnp)
+  const isUpnp  = isStream && (data.isUpnp === true || String(data.streamKind || '').trim().toLowerCase() === 'upnp');
+  const isRadio = isStream && !isUpnp;
 
   // --- Core state ---
   currentFile = data.file || '';
@@ -1279,7 +1316,48 @@ function updateUI(data) {
   let displayArtist = data.artist || '';
   let displayTitle  = data.title  || '';
 
-  if (isAirplay && !displayTitle) displayTitle = 'AirPlay';
+  // AirPlay label fallback
+  if (isAirplay && !String(displayTitle || '').trim()) displayTitle = 'AirPlay';
+
+  if (isRadio) {
+    // Prefer stabilized result if caller provided it
+    const stabArtist = String(data?._radioDisplay?.artist || '').trim();
+    const stabTitle  = String(data?._radioDisplay?.title  || '').trim();
+
+    // If API ever adds explicit radioArtist/radioTitle, they should win.
+    const radioArtist = String(data.radioArtist || '').trim();
+    const radioTitle  = String(data.radioTitle  || '').trim();
+
+    // Always try to tease artist/title out of the incoming title line (hyphen split),
+    // because moOde often leaves artist as "Radio station".
+    const incomingTitleLine = decodeHtmlEntities(String(data.title || '').trim());
+
+    let teasedArtist = '';
+    let teasedTitle  = '';
+
+    // Normalize dash spacing first, then split
+    const dashSplit = splitArtistDashTitle(normalizeDashSpacing(incomingTitleLine));
+    if (dashSplit) {
+      teasedArtist = String(dashSplit.artist || '').trim();
+      teasedTitle  = String(dashSplit.title  || '').trim();
+    }
+
+    // Choose best display values (most -> least specific)
+    displayArtist =
+      radioArtist ||
+      stabArtist ||
+      teasedArtist ||
+      String(displayArtist || '').trim() ||          // last resort from payload
+      String(data.album || '').trim() ||             // station name fallback
+      'Radio';
+
+    displayTitle =
+      radioTitle ||
+      stabTitle ||
+      teasedTitle ||
+      String(displayTitle || '').trim() ||           // last resort from payload
+      incomingTitleLine;
+  }
 
   displayArtist = expandInstrumentAbbrevs(displayArtist);
   displayTitle  = expandInstrumentAbbrevs(displayTitle);
@@ -1288,12 +1366,18 @@ function updateUI(data) {
   if (titleEl)  titleEl.textContent  = decodeHtmlEntities(displayTitle);
 
   // =========================
-  // Album line
+  // Album line (prefer iTunes for radio)
   // =========================
 
   if (albumTextEl) {
-    const album = decodeHtmlEntities(String(data.album || ''));
-    const year  = String(data.year || '').trim();
+    const album = isRadio
+      ? decodeHtmlEntities(String(data.radioAlbum || data.album || ''))
+      : decodeHtmlEntities(String(data.album || ''));
+
+    const year = isRadio
+      ? String(data.radioYear || data.year || '').trim()
+      : String(data.year || '').trim();
+
     albumTextEl.textContent = album ? `${album}${year ? ` (${year})` : ''}` : '';
   }
 
@@ -1333,9 +1417,10 @@ function updateUI(data) {
   }
 
   // =========================
-  // Album Art (THE ONLY PLACE)
+  // Album Art (THE ONLY PLACE) -- FIXED
   // =========================
 
+  // Raw candidate (may be http://10.0.0.254/... for AirPlay covers)
   const rawArtUrl =
     (data.altArtUrl && String(data.altArtUrl).trim())
       ? String(data.altArtUrl).trim()
@@ -1347,28 +1432,37 @@ function updateUI(data) {
     artEl &&
     (
       !artEl.getAttribute('src') ||
-      artEl.getAttribute('src').startsWith('data:image')
+      String(artEl.getAttribute('src') || '').startsWith('data:image')
     );
 
-  const artChanged =
-    artKey && (artKey !== lastAlbumArtKey || needsInitialPaint);
+  const artChanged = artKey && (artKey !== lastAlbumArtKey || needsInitialPaint);
 
-  const uiArt640Url = artKey
-    ? `${API_BASE}/art/current_640.jpg?v=${encodeURIComponent(artKey)}`
-    : '';
-
+  // Background should always come from the API endpoint (same origin rules handled)
   const bgArtUrl =
     (ENABLE_BACKGROUND_ART && artKey)
       ? `${API_BASE}/art/current_bg_640_blur.jpg?v=${encodeURIComponent(artKey)}`
       : '';
 
+  // Foreground:
+  // - If we're on PUBLIC (https://moode.brianwis.com), do NOT use altArtUrl if it’s http://10.x (mixed content blocked).
+  // - If we're on LAN, AirPlay should use altArtUrl directly so we get the *real* cover (not a fallback).
+  const isAltHttpLan =
+    /^http:\/\/10\./i.test(rawArtUrl) ||
+    /^http:\/\/192\.168\./i.test(rawArtUrl) ||
+    /^http:\/\/172\.16\./i.test(rawArtUrl);
+
+  const fgUrl = (isAirplay && !IS_PUBLIC && rawArtUrl)
+    ? rawArtUrl
+    : (artKey ? `${API_BASE}/art/current_320.jpg?v=${encodeURIComponent(artKey)}` : '');
+
   if (artChanged) {
     lastAlbumArtKey = artKey;
     lastAlbumArtUrl = rawArtUrl;
 
-    // Foreground (640)
-    if (artEl && uiArt640Url) {
-      artEl.src = uiArt640Url;
+    // Foreground
+    if (artEl) {
+      if (fgUrl) artEl.src = fgUrl;
+      else artEl.removeAttribute('src');
     }
 
     // Background
@@ -1376,8 +1470,9 @@ function updateUI(data) {
       setBackgroundCrossfade(bgArtUrl);
 
       if (artBgEl) {
-        artBgEl.style.backgroundImage =
-          `url("${API_BASE}/art/current_320.jpg?v=${encodeURIComponent(artKey)}")`;
+        // Use the same foreground image as the glow layer when possible
+        const glowUrl = fgUrl || '';
+        artBgEl.style.backgroundImage = glowUrl ? `url("${glowUrl}")` : 'none';
         artBgEl.style.backgroundSize = 'cover';
         artBgEl.style.backgroundPosition = 'center';
       }
@@ -1387,14 +1482,18 @@ function updateUI(data) {
     }
   }
 
-  dlog('[ART]', {
+  dlog('[UI]', {
+    isRadio,
+    isUpnp,
+    isAirplay,
+    displayArtist,
+    displayTitle,
+    radioAlbum: data.radioAlbum,
+    radioYear: data.radioYear,
     artKey,
-    artChanged,
-    needsInitialPaint,
-    uiArt640Url
+    artChanged
   });
 }
-
 
 
 /* =========================

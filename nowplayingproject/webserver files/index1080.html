@@ -1,14 +1,17 @@
-<!-- index1080.html v1.4 -->
+<!-- index1080.html (drop-in replacement) -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Now Playing 1080</title>
+
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
 
   <style>
-    /* Base reset + defaults */
+    /* =========================
+     * Base reset + defaults
+     * ========================= */
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
     body {
@@ -21,12 +24,9 @@
       position: relative;
     }
 
-    /* Boot gating:
-       - #content fades in once (boot only)
-       - background layers are hidden during boot
-       - AFTER boot, JS controls bg opacity + crossfade
-    */
-
+    /* =========================
+     * Boot gating
+     * ========================= */
     body.booting #content {
       opacity: 0;
       transition: opacity 500ms ease;
@@ -37,29 +37,23 @@
       opacity: 0;
     }
 
-    /* Ready: show content, but do NOT leave a transition on it */
     body.ready #content {
       opacity: 1;
       transition: none;
     }
 
-    /* Disable element fades during boot; boot gating owns visibility */
     body.booting .fade-in,
     body.booting .fade-out {
       transition: none !important;
     }
 
-    /* Optional (only matters if JS toggles these later) */
-    body.ready .fade-in { opacity: 1; }
-    body.ready .fade-out { opacity: 0; }
-
+    /* =========================
+     * Background layers
+     * ========================= */
     #background-a,
     #background-b {
       position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
+      inset: 0;
       background-size: cover;
       background-position: center;
       background-repeat: no-repeat;
@@ -69,22 +63,25 @@
       transform: scale(1.08);
 
       z-index: -2;
-      opacity: 0;                     /* default hidden; JS decides which is visible */
-      transition: opacity 800ms ease; /* keep crossfade always enabled */
+      opacity: 0;
+      transition: opacity 800ms ease;
     }
 
+    /* =========================
+     * Main layout
+     * ========================= */
     #content {
       display: flex;
-      flex-direction: row;
       align-items: center;
-      justify-content: left;
-      width: 100%;
+      gap: 100px;
       height: 100%;
       padding: 0 100px;
-      gap: 100px;
       z-index: 1;
     }
 
+    /* =========================
+     * Album art
+     * ========================= */
     #album-art-wrapper {
       width: 700px;
       height: 700px;
@@ -100,7 +97,6 @@
       border-radius: 32px;
       box-shadow: 0 40px 100px rgba(0,0,0,0.9);
       cursor: pointer;
-      transition: transform 0.3s ease;
     }
 
     #album-art-bg {
@@ -109,20 +105,54 @@
       border-radius: 32px;
       filter: blur(18px) brightness(0.2);
       z-index: -1;
-      transition: none;
     }
 
+    /* Favorites heart overlay */
+    #fav-heart {
+      position: absolute;
+      right: 14px;
+      bottom: 14px;
+      width: 48px;
+      height: 48px;
+
+      opacity: 0;
+      transform: scale(0.9);
+      transition: opacity 180ms ease, transform 180ms ease;
+
+      pointer-events: none;
+      z-index: 5;
+      filter: drop-shadow(0 2px 6px rgba(0,0,0,0.55));
+    }
+
+    #fav-heart svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+      fill: #e0182d;
+    }
+
+    #fav-heart.on {
+      opacity: 1;
+      transform: scale(1);
+    }
+    
+    #mode-logo.radio-logo {
+      width: 75px;
+      height: 75px;
+      opacity: 0.85;
+      border-radius: 8px;
+    }
+
+    /* =========================
+     * Text column
+     * ========================= */
     .text-column {
       display: flex;
       flex-direction: column;
-      justify-content: flex-start;
-      align-items: flex-start;
       gap: 20px;
       height: 700px;
-      width: 100%;
       max-width: 1100px;
       position: relative;
-      padding-bottom: 0;
     }
 
     #artist-name {
@@ -131,12 +161,10 @@
       text-shadow: 0 4px 14px rgba(0,0,0,0.9);
     }
 
-    /* Title row (title + stars inline) */
     #titleLine {
       display: flex;
       align-items: baseline;
       gap: 18px;
-      width: 100%;
       flex-wrap: wrap;
     }
 
@@ -144,100 +172,60 @@
       font-size: 50px;
       font-weight: 600;
       text-shadow: 0 3px 12px rgba(0,0,0,0.9);
-      flex: 0 1 auto;
-      max-width: 100%;
     }
 
-    /* Stars wrapper */
     .rating-stars {
-      flex: 0 0 auto;
       display: inline-flex;
-      align-items: baseline;
       cursor: pointer;
-      user-select: none;
-
       font-size: 44px;
-      line-height: 1;
       letter-spacing: 8px;
-      margin-top: 2px;
-      opacity: 0.95;
-
       text-shadow: 0 3px 12px rgba(0,0,0,0.9);
     }
 
-    /* Stars (shared) */
-    .rating-stars span.dim { opacity: 0.20; }
-
+    .rating-stars span.dim { opacity: 0.2; }
     .rating-stars span.filled {
-      color: #d4af37; /* muted, classic gold (not neon) */
-
-      text-shadow:
-        0 2px 10px rgba(0,0,0,0.85),
-        0 0 1px rgba(0,0,0,0.6);
+      color: #d4af37;
     }
+
     #album-link {
       font-size: 48px;
       color: #ccc;
       text-decoration: none;
-      text-shadow: 0 2px 10px rgba(0,0,0,0.8);
     }
 
     #file-info {
       font-size: 36px;
       font-weight: 600;
       color: #aaa;
-      text-shadow: 0 2px 8px rgba(0,0,0,0.8);
     }
 
     .hires-badge {
-      display: inline-block;
-      background-color: gold;
+      background: gold;
       color: black;
       font-size: 0.6em;
       padding: 1px 4px;
       margin-left: 8px;
-      border: 2px solid #b8860b;
       border-radius: 6px;
-      position: relative;
-      top: -6px;
+      display: none;
     }
 
     #personnel-info {
       font-size: 18px;
       color: #ccc;
-      line-height: 1.4;
-      word-wrap: break-word;
-      display: block;
       margin-bottom: 12px;
-      margin-right: 100px;
     }
 
-    /* ===== Next Up overlay ===== */
-    :root {
-      --nextup-left-pad: 0px;
-      --nextup-bottom-gap: 20px;
-    }
-
+    /* =========================
+     * Next Up
+     * ========================= */
     #next-up {
       position: absolute;
-      left: var(--nextup-left-pad);
-      bottom: calc(8px + var(--nextup-bottom-gap));
-
-      width: 100%;
+      bottom: 28px;
       display: flex;
       align-items: center;
       gap: 14px;
-
       font-size: 26px;
       font-weight: 600;
-      color: rgba(255,255,255,0.92);
-      text-shadow: 0 2px 10px rgba(0,0,0,0.85);
-
-      z-index: 15;
-
-      border-radius: 12px;
-      background: transparent !important;
-      backdrop-filter: blur(6px);
     }
 
     #next-up-img {
@@ -245,57 +233,43 @@
       height: 75px;
       border-radius: 12px;
       object-fit: cover;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.6);
-      flex-shrink: 0;
       display: none;
     }
 
-    #next-up-text {
-      flex: 1;
-      min-width: 0;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 900px;
-    }
-
-    /* Progress Bar */
+    /* =========================
+     * Progress bar
+     * ========================= */
     #progress-bar-wrapper {
       width: 900px;
       height: 8px;
       background: rgba(255,255,255,0.15);
       border-radius: 4px;
-      overflow: hidden;
       margin-top: auto;
+      overflow: hidden;
     }
 
     #progress-fill {
-      height: 12px; /* KEEP 12px */
-      width: 100%;
+      height: 12px;
       background: #4fc3f7;
       transform: scaleX(0);
-      transform-origin: left center;
-      will-change: transform;
-      border-radius: 3px;
-      transition: none;
+      transform-origin: left;
     }
 
-    /* Bottom-right mode logo */
+    /* =========================
+     * Mode logo
+     * ========================= */
     #mode-logo {
-      width: 100px;
-      height: 100px;
-      border-radius: 16px;
-      object-fit: cover;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.6);
-
       position: absolute;
       right: 0;
       bottom: 0;
-      opacity: 0.9;
+      width: 100px;
+      height: 100px;
       display: none;
     }
 
-    /* Modal overlay */
+    /* =========================
+     * Modal
+     * ========================= */
     #artist-details-container {
       position: fixed;
       inset: 0;
@@ -305,63 +279,60 @@
       align-items: center;
       justify-content: center;
     }
-
-    #artist-details {
-      max-width: 90%;
-      max-height: 90%;
-      overflow-y: auto;
-      font-size: 24px;
-      line-height: 1.7;
-      text-align: center;
-
-      background: rgba(0,0,0,0.85);
-      border: 1px solid rgba(255,255,255,0.15);
-      border-radius: 20px;
-      padding: 40px 50px;
-    }
-
-    #artist-details p { margin: 56px 0; }
   </style>
 </head>
 
 <body class="booting">
+
   <div id="background-a"></div>
   <div id="background-b"></div>
 
   <div id="content">
-    <!-- Album Art Column -->
+
+    <!-- Album Art -->
     <div id="album-art-wrapper">
       <div id="album-art-bg"></div>
+
       <img
         id="album-art"
         src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
         alt="Album Art"
       />
+
+      <!-- Favorites heart -->
+      <div id="fav-heart" aria-hidden="true">
+        <svg viewBox="0 0 24 24" shape-rendering="geometricPrecision">
+          <path d="M12 21
+                   C12 21 3 14.5 3 8.5
+                   C3 6 5 4 7.5 4
+                   C9.24 4 10.91 5 12 6.44
+                   C13.09 5 14.76 4 16.5 4
+                   C19 4 21 6 21 8.5
+                   C21 14.5 12 21 12 21Z"/>
+        </svg>
+      </div>
     </div>
 
-    <!-- Text Column -->
+    <!-- Text -->
     <div class="text-column">
       <div id="artist-name"></div>
 
-      <!-- Title + Stars INLINE -->
       <div id="titleLine">
         <span id="track-title"></span>
-        <span id="ratingStars" class="rating-stars" aria-label="Rating"></span>
+        <span id="ratingStars" class="rating-stars"></span>
       </div>
 
-      <div id="album-info">
-        <a id="album-link" href="javascript:void(0)"><span id="album-text"></span></a>
-      </div>
+      <a id="album-link"><span id="album-text"></span></a>
 
       <div id="file-info">
         <span id="file-info-text"></span>
-        <span id="hires-badge" class="hires-badge" style="display:none;">Lossless</span>
+        <span id="hires-badge" class="hires-badge">Lossless</span>
       </div>
 
       <div id="personnel-info"></div>
 
       <div id="next-up">
-        <img id="next-up-img" alt="" />
+        <img id="next-up-img" alt="">
         <span id="next-up-text"></span>
       </div>
 
@@ -369,8 +340,9 @@
         <div id="progress-fill"></div>
       </div>
 
-      <img id="mode-logo" alt="" />
+      <img id="mode-logo" alt="">
     </div>
+
   </div>
 
   <div id="artist-details-container">
