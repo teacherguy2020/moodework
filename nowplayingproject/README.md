@@ -1,6 +1,3 @@
-⸻
-
-
 # moOde “Now Playing”
 
 A distributed, high-performance **Now Playing** display and control system for **moOde Audio Player**, designed for a dedicated full-screen 1080p display — but viewable from **any device on your network**.
@@ -362,4 +359,4 @@ Why This Architecture?
 	•	Alexa stays sane
 
 ⸻
-![Display](IMG_6007.jpeg)
+![Display](./IMG_6007.jpeg)
