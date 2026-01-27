@@ -122,11 +122,12 @@ Playback Modes & Behavior
 
 | Mode    | Artwork Quality       | Ratings | Progress | Notes                              |
 |---------|-----------------------|---------|----------|------------------------------------|
-| Local   | ⭐⭐⭐⭐⭐ Strongest | ✅ Yes  | ✅ Yes   | Deep file metadata + MPD stickers  |
-| Radio   | ⭐⭐⭐⭐ Strong      | Hidden  | Hidden   | iTunes art- album/year text         |
-| UPnP    | ⭐⭐⭐ Moderate      | Hidden  | Hidden   | Treated as stream                   |
-| AirPlay | ⭐⭐⭐⭐ Strong      | Hidden  | Hidden   | LAN art + HTTPS-safe fallback       |
+| Local   | Strongest             | ✅ Yes  | ✅ Yes   | Deep file metadata + MPD stickers  |
+| Radio   | Strong                | Hidden  | Hidden   | iTunes art- album/year text        |
+| UPnP    | Moderate              | Hidden  | Hidden   | Treated as stream                  |
+| AirPlay | Strong                | Hidden  | Hidden   | LAN art + HTTPS-safe fallback      |
 |---------|-----------------------|---------|----------|------------------------------------|
+In all modes, the web display strives for a consistent presentation of metadata
 ```
 ⸻
 
