@@ -299,13 +299,13 @@ function markReadyOnce() {
  * Background crossfade
  * ========================= */
 
-function setBackgroundCrossfade(url) {
+function setBackgroundCrossfade(url, keyOverride = '') {
   const a = document.getElementById('background-a');
   const b = document.getElementById('background-b');
   if (!a || !b) return;
 
   const nextUrl = String(url || '').trim();
-  const nextKey = normalizeArtKey(nextUrl);
+  const nextKey = String(keyOverride || '').trim() || normalizeArtKey(nextUrl);
 
   if (!nextKey) {
     a.style.backgroundImage = 'none';
@@ -320,7 +320,6 @@ function setBackgroundCrossfade(url) {
     return;
   }
 
-  // ✅ compare by key, not raw URL
   if (nextKey === bgKeyFront) return;
   if (nextKey === bgLoadingKey) return;
 
@@ -956,7 +955,7 @@ function setPausedScreensaver(on) {
   }
 
   const artBgEl = document.getElementById('album-art-bg');
-  setBackgroundCrossfade('');
+  setBackgroundCrossfade('', '');
   if (artBgEl) artBgEl.style.backgroundImage = 'none';
 }
 
@@ -1267,6 +1266,33 @@ function bindFavoriteUIOnce() {
  * Art helpers
  * ========================= */
 
+function isItunesArtUrl(u) {
+  const s = String(u || '').trim();
+  if (!s) return false;
+
+  // Apple / iTunes artwork domains commonly seen
+  if (/mzstatic\.com/i.test(s)) return true;
+  if (/itunes\.apple\.com/i.test(s)) return true;
+  if (/music\.apple\.com/i.test(s)) return true;
+
+  return false;
+}
+
+function looksLikeAirplayCover(u) {
+  const s = String(u || '').trim();
+  if (!s) return false;
+
+  // your AirPlay cover pipeline tends to look like this
+  if (/imagesw\/airplay-covers/i.test(s)) return true;
+  if (/\/airplay-covers\//i.test(s)) return true;
+
+  // also catch your own proxied "current_320" with persistent IDs
+  // (not perfect, but helps prevent stale AirPlay art dominating Radio)
+  if (/\/art\/current_320\.jpg/i.test(s) && /0x[0-9a-f]+/i.test(decodeURIComponent(s))) return true;
+
+  return false;
+}
+
 function toBgUrl(artUrl) {
   const key = normalizeArtKey(artUrl);
   return key ? `http://10.0.0.233:8000/art/current_bg_640_blur.jpg?v=${encodeURIComponent(key)}` : '';
@@ -1421,10 +1447,29 @@ function updateUI(data) {
   // =========================
 
   // Raw candidate (may be http://10.0.0.254/... for AirPlay covers)
-  const rawArtUrl =
-    (data.altArtUrl && String(data.altArtUrl).trim())
-      ? String(data.altArtUrl).trim()
-      : (data.albumArtUrl || '');
+  const alt = String(data.altArtUrl || '').trim();
+  const primary = String(data.albumArtUrl || '').trim();
+
+  // Radio: altArtUrl is only "trusted" if it looks like iTunes art.
+  // Otherwise we prefer station logo until iTunes art arrives.
+  let rawArtUrl = '';
+
+  if (isRadio) {
+  if (alt && isItunesArtUrl(alt) && !looksLikeAirplayCover(alt)) {
+      rawArtUrl = alt;           // iTunes art
+    } else {
+      rawArtUrl = primary;       // station logo (or blank)
+    }
+  } else {
+    // Non-radio: keep your original precedence
+    rawArtUrl = alt || primary;
+  }
+  console.log('[ART]', {
+    isRadio,
+    alt: String(data.altArtUrl || '').slice(0, 80),
+    albumArtUrl: String(data.albumArtUrl || '').slice(0, 80),
+    chosen: String(rawArtUrl || '').slice(0, 80)
+  });
 
   const artKey = normalizeArtKey(rawArtUrl);
 
@@ -1440,7 +1485,7 @@ function updateUI(data) {
   // Background should always come from the API endpoint (same origin rules handled)
   const bgArtUrl =
     (ENABLE_BACKGROUND_ART && artKey)
-      ? `${API_BASE}/art/current_bg_640_blur.jpg?v=${encodeURIComponent(artKey)}`
+      ? `${API_BASE}/art/current_320.jpg?v=${encodeURIComponent(artKey)}`
       : '';
 
   // Foreground:
@@ -1467,7 +1512,7 @@ function updateUI(data) {
 
     // Background
     if (ENABLE_BACKGROUND_ART) {
-      setBackgroundCrossfade(bgArtUrl);
+      setBackgroundCrossfade(bgArtUrl, artKey);
 
       if (artBgEl) {
         // Use the same foreground image as the glow layer when possible
@@ -1477,7 +1522,7 @@ function updateUI(data) {
         artBgEl.style.backgroundPosition = 'center';
       }
     } else {
-      setBackgroundCrossfade('');
+      setBackgroundCrossfade('', '');
       if (artBgEl) artBgEl.style.backgroundImage = 'none';
     }
   }
@@ -1569,8 +1614,8 @@ function clearUI() {
 
   if (artEl) artEl.removeAttribute('src');
   if (artBgEl) artBgEl.style.backgroundImage = 'none';
-  setBackgroundCrossfade('');
-
+  setBackgroundCrossfade('', '');
+  
   if (logoEl) {
     logoEl.style.display = 'none';
     logoEl.removeAttribute('src');
