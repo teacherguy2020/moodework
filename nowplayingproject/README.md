@@ -398,15 +398,15 @@ curl	Used internally for HTTP calls to moOde
 bash / coreutils	Standard Linux tooling used by scripts
 
 Install:
-
+```
 sudo apt update
 sudo apt install -y nodejs npm flac curl
-
+```
 Verify:
-
+```
 node --version
 metaflac --version
-
+```
 
 ⸻
 
@@ -433,9 +433,9 @@ MPD sticker support	Persistent per-track ratings
 Writable sticker DB	/var/lib/mpd/sticker.sql
 
 Verify:
-
+```
 grep sticker_file /var/lib/mpd/mpd.conf
-
+```
 Expected:
 
 sticker_file "/var/lib/mpd/sticker.sql"
@@ -454,9 +454,9 @@ Public domain	Required for Alexa audio URLs
 AWS Lambda	Runs Alexa Skill logic
 
 Install Caddy (recommended):
-
+```
 sudo apt install -y caddy
-
+```
 
 ⸻
 
@@ -469,9 +469,9 @@ python3	Simple, stable static web server
 Chromium	Kiosk display (Pi #3 only)
 
 Serve UI:
-
+```
 python3 -m http.server 8000
-
+```
 
 ⸻
 
@@ -486,23 +486,23 @@ htop	Diagnose CPU/memory issues
 unclutter	Hide mouse cursor in kiosk mode
 
 Install:
-
+```
 sudo apt install -y jq htop unclutter
 sudo npm install -g pm2
-
+```
 
 ⸻
 
 Tool Usage Examples
 
 Inspect now-playing output:
-
+```
 curl http://<PI2_IP>:3000/now-playing | jq
-
+```
 Check rating directly:
-
+```
 mpc sticker get song "USB/Drive/Album/track.flac" rating
-
+```
 
 ⸻
 
