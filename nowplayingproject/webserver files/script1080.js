@@ -1388,7 +1388,7 @@ function updateUI(data) {
   if (fileInfoEl && hiresBadge) {
     const parts = [];
     if (data.encoded) parts.push(data.encoded);
-    if (data.outrate) parts.push(data.outrate);
+    //if (data.outrate) parts.push(data.outrate);
 
     fileInfoEl.textContent = parts.join(' • ');
 
