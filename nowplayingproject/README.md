@@ -22,7 +22,7 @@ across multiple Raspberry Pi nodes for **stability, performance, and flexibility
 > It only talks to the API node.
 
 ---
-
+```
 ## System Architecture (Three Pis)
 
 ```text
@@ -57,7 +57,7 @@ across multiple Raspberry Pi nodes for **stability, performance, and flexibility
 │ • script1080.js        │
 └────────────────────────┘
 
-
+```
 ⸻
 
 Roles of Each Raspberry Pi
