@@ -120,13 +120,13 @@ You can skip Pi #3 entirely and view the display from any browser.
 ```
 Playback Modes & Behavior
 
-Mode	Source	Album Art (Primary → Fallback)	Ratings	Progress	Notes
-Local	MPD file	Embedded → folder → coverart.php	✅ Yes	✅ Yes	Full metadata + stickers
-Radio	Stream URL	iTunes lookup → station logo	❌ No	❌ No	Album/year from iTunes
-UPnP	MPD stream	Resolved local file → coverart.php	❌ No	❌ No	Treated as stream
-AirPlay	Shairplay	aplmeta cover → API proxy / fallback	❌ No	❌ No	LAN-only raw art
-
-This behavior is intentional and enforced consistently by both the API and the UI.
+| Mode    | Artwork Quality       | Ratings | Progress | Notes                              |
+|---------|-----------------------|---------|----------|------------------------------------|
+| Local   | ⭐⭐⭐⭐⭐ Strongest | ✅ Yes  | ✅ Yes   | Deep file metadata + MPD stickers  |
+| Radio   | ⭐⭐⭐⭐ Strong      | Hidden  | Hidden   | iTunes art- album/year text         |
+| UPnP    | ⭐⭐⭐ Moderate      | Hidden  | Hidden   | Treated as stream                   |
+| AirPlay | ⭐⭐⭐⭐ Strong      | Hidden  | Hidden   | LAN art + HTTPS-safe fallback       |
+|---------|-----------------------|---------|----------|------------------------------------|
 ```
 ⸻
 
