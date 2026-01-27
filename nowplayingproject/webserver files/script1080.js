@@ -1304,12 +1304,12 @@ function looksLikeAirplayCover(u) {
 
 function toBgUrl(artUrl) {
   const key = normalizeArtKey(artUrl);
-  return key ? `http://10.0.0.233:8000/art/current_bg_640_blur.jpg?v=${encodeURIComponent(key)}` : '';
+  return key ? `${API_BASE}/art/current_bg_640_blur.jpg?v=${encodeURIComponent(key)}` : '';
 }
 
 function toUiArtUrl(artUrl) {
   const key = normalizeArtKey(artUrl);
-  return key ? `http://10.0.0.233:8000/art/current_320.jpg?v=${encodeURIComponent(key)}` : '';
+  return key ? `${API_BASE}/art/current_320.jpg?v=${encodeURIComponent(key)}` : '';
 }
 
 /* =========================
@@ -1538,8 +1538,8 @@ function updateUI(data) {
 
     // Background
     if (ENABLE_BACKGROUND_ART) {
-      setBackgroundCrossfade(bgArtUrl);
-
+      setBackgroundCrossfade(bgArtUrl, artKey);
+      
       if (artBgEl) {
         const glowUrl = fgUrl || '';
         artBgEl.style.backgroundImage = glowUrl ? `url("${glowUrl}")` : 'none';
