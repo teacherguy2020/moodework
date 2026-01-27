@@ -175,7 +175,7 @@ In all modes, the UI strives for consistent metadata presentation.
 
 ---
 
-## Project Files
+## Primary Project Files
 
 | File | Runs On | Purpose |
 |-----|--------|---------|
@@ -185,6 +185,7 @@ In all modes, the UI strives for consistent metadata presentation.
 | `images/*.png` | Pi #2 | Mode icons / fallback art |
 
 ---
+Other necessary files are included in directories.
 
 ## Networking Requirements
 
