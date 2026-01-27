@@ -1,3 +1,10 @@
+Absolutely — below is a cleanly revised, drop-in README.md, fully in Markdown, incorporating the recent work and the additions we discussed. I’ve been careful to preserve your voice and structure, while adding clarity where the system has real nuance.
+
+You can paste this directly into GitHub.
+
+⸻
+
+
 # moOde “Now Playing”
 
 A distributed, high-performance **Now Playing** display system for **moOde Audio Player**, designed for a dedicated full-screen 1080p display (or viewable from any device on your network).
@@ -52,6 +59,18 @@ It only talks to Pi #2.
 
 ⸻
 
+Playback Modes & Behavior
+
+Mode	Source	Album Art (Primary → Fallback)	Ratings	Progress	Notes
+Local	MPD file	Embedded → folder → coverart.php	✅ Yes	✅ Yes	Full metadata + stickers
+Radio	Stream URL	iTunes lookup → station logo	❌ No	❌ No	Album/year from iTunes
+UPnP	MPD stream	Resolved local file → coverart.php	❌ No	❌ No	Treated as stream
+AirPlay	Shairplay	aplmeta cover → API proxy / fallback	❌ No	❌ No	LAN-only raw art
+
+This behavior is intentional and enforced consistently by both the API and UI.
+
+⸻
+
 Roles of Each Raspberry Pi
 
 Pi #1 — moOde Player (Audio Only)
@@ -61,11 +80,12 @@ Pi #1 — moOde Player (Audio Only)
 	•	Exposes moOde APIs used by Pi #2:
 	•	/command/?cmd=get_currentsong
 	•	/command/?cmd=status
-	•	/var/local/www/aplmeta.txt (AirPlay metadata/cover pipeline output)
+	•	/var/local/www/aplmeta.txt (AirPlay metadata/art pipeline output)
 
-This Pi runs no custom code for this project. It just moOdes.
+This Pi runs no custom code for this project.
+It just moOdes.
 
-If Pi #2 needs access to local files, set up Samba or NFS (or attach the library to Pi #2).
+If Pi #2 needs access to local files, use Samba or NFS, or attach storage directly.
 
 ⸻
 
@@ -74,54 +94,56 @@ Pi #2 — API + Web Server (The Brains)
 This is where all logic lives.
 
 Responsibilities:
-	•	Queries Pi #1 (moOde) for playback status
-	•	Reads deep metadata directly from music files (when applicable)
-	•	Normalizes output for:
+	•	Queries Pi #1 for playback state
+	•	Reads deep metadata directly from audio files
+	•	Normalizes output across:
 	•	local files
 	•	radio streams
+	•	UPnP
 	•	AirPlay
 	•	Caches metadata and artwork
-	•	Serves two things:
+	•	Serves:
 	•	JSON API → Port 3000
-	•	Static web UI → Port 8000
+	•	Static UI → Port 8000
 
 Key components:
-	•	moode-nowplaying-api.mjs (Node / Express) (renamed from webserver.mjs)
+	•	moode-nowplaying-api.mjs (Node / Express)
 	•	metaflac
-	•	A simple static web server
+	•	Static web server (no backend logic)
 
 ⸻
 
 Pi #3 — Display / Kiosk (Optional)
 	•	Connected to a TV or monitor
 	•	Runs Chromium in kiosk mode
-	•	Loads the UI from Pi #2:
+	•	Loads UI from Pi #2:
 
 http://<PI2_IP>:8000/index1080.html
 
-No metadata logic, no audio, no local files required.
+No metadata logic.
+No audio.
+No local files required.
 
-You can skip Pi #3 entirely and view the display from any computer, tablet, or phone.
+You may skip Pi #3 entirely and view the display from any device.
 
 ⸻
 
 Project Files
 
-File                          Runs on   Purpose
-—————————————————————————————————————————————————————————————
-moode-nowplaying-api.mjs       Pi #2     Aggregates moOde state + metadata into JSON
-index1080.html                 Pi #2     1080p fullscreen UI
-script1080.js                  Pi #2     UI logic (polling, progress bar, caching)
-images/airplay.png             Pi #2     Fallback/branding artwork (optional)
+File	Runs on	Purpose
+moode-nowplaying-api.mjs	Pi #2	Aggregates moOde + metadata into JSON
+index1080.html	Pi #2	1080p fullscreen UI
+script1080.js	Pi #2	UI logic (polling, art, progress, cache)
+images/airplay.png	Pi #2	Branding / fallback art
 
 
 ⸻
 
 Networking Requirements
-
-All devices must be on the same LAN for the 3-Pi display stack.
-
-If you enable the optional Alexa integration (below), Pi #2 must also be reachable over HTTPS from the internet at a domain you control (or via a secure tunnel).
+	•	All Pis must be on the same LAN
+	•	Optional Alexa integration requires:
+	•	HTTPS
+	•	Public domain or secure tunnel to Pi #2
 
 ⸻
 
@@ -140,7 +162,7 @@ metaflac —version
 
 ⸻
 
-Music library access (IMPORTANT)
+Music Library Access (Important)
 
 Pi #2 must have read access to the same music files used by moOde.
 
@@ -148,25 +170,26 @@ Common approaches:
 	•	USB drive attached to Pi #2
 	•	Samba / NFS mount from Pi #1
 
-The Node service needs to map moOde-reported paths (e.g., USB/YourDrive/...) to Pi #2 mount paths (e.g., /mnt/YourDrive/...). Configure this in moode-nowplaying-api.mjs.
+The API maps moOde paths (e.g. USB/Drive/...) to Pi #2 paths (e.g. /mnt/Drive/...).
+Configure this mapping in moode-nowplaying-api.mjs.
 
 ⸻
 
-Configure IP addresses
+Configure IP Addresses
 
 Edit moode-nowplaying-api.mjs:
-	•	MOODE_BASE_URL → http://<PI1_MOODE_IP>
-	•	any bind/address settings → <PI2_IP>
+	•	MOODE_BASE_URL → http://<PI1_IP>
+	•	Bind/listen address → <PI2_IP>
 
 ⸻
 
-Start the API server (Port 3000)
+Start API Server (Port 3000)
 
-Run manually:
+Manual:
 
 node moode-nowplaying-api.mjs
 
-Or use PM2 (recommended):
+With PM2 (recommended):
 
 sudo npm install -g pm2
 pm2 start moode-nowplaying-api.mjs —name moode-now-playing
@@ -179,45 +202,33 @@ curl http://<PI2_IP>:3000/now-playing | jq
 
 ⸻
 
-About the Web Server (Port 8000)
+Web Server (Port 8000)
 
-What this server does
-
-The web server serves only static files:
-	•	index1080.html
-	•	script1080.js
-	•	images
-
-There is no backend logic in the static server.
-
-⸻
-
-The simplest (recommended) web server
-
-From the directory containing the UI files:
+Recommended Static Server
 
 python3 -m http.server 8000
 
-This:
-	•	uses almost no CPU
-	•	is stable for always-on displays
-	•	requires zero configuration
-	•	is perfectly adequate
+Why:
+	•	near-zero CPU
+	•	no configuration
+	•	stable for kiosk use
 
 Test:
 
 curl http://<PI2_IP>:8000/index1080.html
 
+⚠️ Do not serve the UI from port 3000
+Port 3000 is a JSON API only. Subtle browser failures will occur.
 
 ⸻
 
 Viewing the Display
 
-From any device:
+Any device:
 
 http://<PI2_IP>:8000/index1080.html
 
-From the display Pi (Chromium kiosk):
+Chromium kiosk:
 
 chromium \
   —kiosk \
@@ -226,318 +237,108 @@ chromium \
   —disable-session-crashed-bubble \
   http://<PI2_IP>:8000/index1080.html
 
-Hide mouse cursor:
+Hide mouse:
 
 unclutter -idle 0 &
 
 
 ⸻
 
-Common Pitfalls
+AirPlay Artwork (Important)
 
-Avoid these mistakes:
-	•	Don’t open index1080.html via file://
-	•	Don’t run the web server on Pi #3
-	•	Don’t point the UI directly at moOde
-	•	Don’t serve the UI from port 3000
+AirPlay metadata and cover art are produced by moOde via:
+
+/var/local/www/aplmeta.txt
+
+Behavior:
+	•	LAN access: UI may load AirPlay cover images directly
+	•	Public HTTPS access: raw AirPlay URLs are blocked (mixed content)
+
+In public mode:
+	•	Art is proxied and normalized via Pi #2 when possible
+	•	Otherwise the UI falls back gracefully
+
+This behavior is intentional.
+
+⸻
+
+MPD Stickers (Required for Track Ratings)
+
+Ratings are stored using MPD stickers.
+
+Why:
+	•	Persistent
+	•	File-scoped
+	•	No audio file modification
+
+Required MPD config:
+
+sticker_file “/var/lib/mpd/sticker.sql”
+
+Verify:
+
+ls -l /var/lib/mpd/sticker.sql
+
+Sticker key used:
+
+rating (0–5)
+
+Examples:
+
+mpc sticker set song “/path/file.flac” rating 4
+mpc sticker get song “/path/file.flac” rating
+
+Ratings are automatically disabled for:
+	•	Radio
+	•	UPnP
+	•	AirPlay
+
+⭐ Audio files are never modified.
 
 ⸻
 
 Why Three Pis?
 
 Stability
-	•	Audio playback isolated from UI crashes
+Audio playback isolated from UI crashes
 
 Performance
-	•	No heavy JS on the moOde Pi
+No JS load on moOde Pi
 
 Flexibility
-	•	Display can reboot independently
-	•	UI can be redesigned without touching playback
+UI and display can reboot independently
 
 ⸻
 
-Optional: Alexa Skill + AWS Lambda (Voice Control + Echo Playback)
-
-This project can optionally include an Alexa Skill backed by AWS Lambda to:
-	•	play the current moOde track on an Echo device,
-	•	answer “what’s playing?”,
-	•	handle pause/resume/next,
-	•	and coordinate MPD queue advancement so Alexa playback stays aligned.
-
-High-level idea
-	•	Pi #2 hosts the public-facing API used by Alexa (HTTPS).
-	•	AWS Lambda runs the Alexa Skill logic.
-	•	Lambda calls Pi #2 endpoints such as:
-	•	GET /now-playing (no key)
-	•	GET /track?file=...&k=... (requires key; returns an audio stream URL)
-	•	POST /queue/advance?k=...&pos0=... (advances MPD queue when Alexa starts playback)
-
-This keeps Lambda “stateless-ish” and keeps queue authority in the Node service on Pi #2.
-
-Alexa devices generally require HTTPS for audio URLs.
-Typical base: https://moode.YOURDOMAINNAME.com
+Tested With
+	•	moOde Audio Player 8.x
+	•	Raspberry Pi 3B+, 4, 5
+	•	Chromium kiosk (ARM)
+	•	Safari (iOS)
+	•	Chrome (desktop)
+	•	Local FLAC, Radio, UPnP, AirPlay
 
 ⸻
 
-Required endpoints on Pi #2 (Node API)
-
-Public / no key
-	•	GET /now-playing
-Returns normalized “Now Playing” JSON (title/artist/album/file/songpos/art URLs/etc).
-
-Key required
-	•	GET /track?file=<mpd_file>&k=<key>[&t=<seconds>]
-Produces an HTTPS stream that Alexa can play.
-	•	POST /queue/advance?k=<key>&pos0=<pos0>[&file=<file>]
-Tells the server to advance the MPD queue to keep the “next” logic correct.
-
-⸻
-
-Lambda environment variables
-
-Set these in the Lambda console (Configuration → Environment variables):
-
-Core:
-	•	MOODE_API_BASE
-Example: https://moode.YOURDOMAINNAME.com
-
-Optional paths:
-	•	NOW_PLAYING_PATH (default /now-playing)
-	•	TRACK_PATH (default /track)
-	•	QUEUE_ADVANCE_PATH (default /queue/advance)
-
-Secret:
-	•	TRACK_KEY (required)
-Shared secret used by /track and /queue/advance.
-
-Timing / tuning (optional):
-	•	META_STABLE_GAP_MS (default 250)
-	•	NEXT_ENQUEUE_GAP_MS (default 5000)
-
-⸻
-
-What the Alexa Skill does (behavior)
-
-LaunchRequest (“Alexa, open moode”)
-	1.	Lambda calls GET /now-playing
-	2.	Builds AudioPlayer.Play with REPLACE_ALL
-	3.	Points Alexa to /track?file=...&k=...
-	4.	Includes metadata/art (title/subtitle/art sources)
-
-NowPlayingIntent (“Alexa, what’s playing?”)
-	1.	Lambda calls GET /now-playing
-	2.	Speaks: “Now playing  by ”
-
-Pause / Stop
-	•	Sends AudioPlayer.Stop
-
-Resume
-	•	If Lambda has a stored token/offset → resumes using the same token + offset
-	•	Otherwise falls back to “play current now-playing from 0”
-
-Next
-	•	Currently implemented as a “play the current now-playing snapshot” (REPLACE_ALL)
-	•	Queue mutation is handled via the playback event flow below
-
-⸻
-
-AudioPlayer event flow (the important part)
-
-Alexa sends playback lifecycle events. This Skill uses them to keep MPD aligned.
-
-PlaybackStarted → advance MPD
-
-When Alexa actually begins playing a track, Lambda:
-	1.	Parses the token to extract pos0 and file
-	2.	Calls:
-POST /queue/advance?k=...&pos0=...&file=...
-	3.	Deduplicates advances (token + time guard)
-
-Also includes a resume guard:
-	•	If the started token equals the last known token and offset > 0, it treats it as a resume and does not advance MPD.
-
-PlaybackNearlyFinished → enqueue next
-
-Before a track ends, Alexa emits NearlyFinished. Lambda:
-	1.	Calls GET /now-playing (snapshot)
-	2.	Builds AudioPlayer.Play with ENQUEUE
-	3.	Sets expectedPreviousToken to the finished token
-(both top-level and inside stream.expectedPreviousToken for device compatibility)
-	4.	Deduplicates enqueues via NEXT_ENQUEUE_GAP_MS
-
-PlaybackFinished
-	•	No action (next should already be enqueued)
-
-PlaybackStopped / PlaybackPaused / PlaybackFailed
-	•	Stores token + offset for resume
-
-⸻
-
-Token format (why it exists)
-
-Tokens are used to:
-	•	deduplicate events (Alexa can send duplicates),
-	•	detect resume vs fresh play,
-	•	carry MPD queue position (pos0) so the server can advance correctly.
-
-Token payload is base64url JSON:
-	•	Prefix: moode-track:
-	•	JSON example:
-
-{ “file”: “USB/Drive/Album/track.flac”, “pos0”: 128 }
-
-
-
-⸻
-
-Security note
-
-The /track endpoint includes a key in the query string because:
-	•	Alexa must fetch an audio URL directly
-	•	and it must be reliable across devices
-
-Treat TRACK_KEY like a password:
-	•	do not commit it to GitHub
-	•	keep it in Lambda env vars (and on the server side)
-
-⸻
-
-Optional: MPD Stickers for Track Ratings:
-
-Good catch — yes, there are MPD sticker requirements for ratings to work, and they’re worth spelling out explicitly in the docs 👍
-The good news: they’re small, standard, and already compatible with moOde.
-
-Below is a clean, README-ready explanation you can drop straight into your project.
-
-⸻
-
-MPD Stickers (Required for Track Ratings)
-
-Track ratings in this project are stored using MPD stickers. Stickers are MPD’s built-in mechanism for attaching arbitrary metadata (like ratings) to individual audio files.
-
-Why Stickers Are Used
-	•	Ratings must persist outside the UI
-	•	Ratings must be associated with the audio file, not the playlist
-	•	MPD stickers are:
-	•	Lightweight
-	•	File-scoped
-	•	Already supported by moOde
-
-No database schema changes, no tags written into audio files.
-
-⸻
-
-Required MPD Configuration
-
-MPD must have a writable sticker database enabled.
-
-In moOde, this is typically already set, but verify the following entry exists in your MPD configuration:
-
-sticker_file “/var/lib/mpd/sticker.sql”
-
-Where to Check
-
-On moOde systems, MPD configuration is generated by moOde, but you can verify the active config with:
-
-mpd —version
-
-or inspect:
-
-cat /var/lib/mpd/mpd.conf | grep sticker
-
-You should see something equivalent to:
-
-sticker_file “/var/lib/mpd/sticker.sql”
-
-
-⸻
-
-File Permissions (Important)
-
-MPD must be able to write to the sticker database file.
-
-Verify ownership and permissions:
-
-ls -l /var/lib/mpd/sticker.sql
-
-Typical correct ownership:
-
--rw-r—— mpd audio /var/lib/mpd/sticker.sql
-
-If the file does not exist, MPD will create it automatically after the first sticker write, as long as the directory is writable.
-
-⸻
-
-Sticker Key Used by This Project
-
-This project uses a numeric rating from 0–5, stored under a single sticker key:
-
-rating
-
-Examples:
-
-# Set rating
-mpc sticker set song “/path/to/file.flac” rating 4
-
-# Get rating
-mpc sticker get song “/path/to/file.flac” rating
-
-The Node API (moode-nowplaying-api.mjs) handles all sticker reads and writes automatically — users never need to run these commands manually.
-
-⸻
-
-When Ratings Are Disabled Automatically
-
-Ratings are intentionally disabled for:
-	•	Radio streams
-	•	AirPlay playback
-
-Why:
-	•	Stickers only apply to files MPD can address directly
-	•	Streams and AirPlay do not map cleanly to a file path
-
-The UI and API automatically hide rating controls in these modes.
-
-⸻
-
-No Audio File Modification
-
-Important reassurance for users:
-
-⭐ Ratings do NOT modify your audio files.
-
-No FLAC tags are written, no files are touched.
-All ratings live exclusively in MPD’s sticker database.
-
-⸻
-
-Summary (TL;DR)
-
-For ratings to work:
-
-✅ MPD stickers enabled
-✅ sticker_file configured
-✅ MPD can write to /var/lib/mpd/sticker.sql
-✅ Local file playback (not radio / AirPlay)
-
-If moOde is installed normally, nothing extra is usually required — this section mainly exists so users understand why ratings work and how they’re stored.
-
-⸻
-
-
-Troubleshooting (common)
+Troubleshooting (Common)
 	•	Alexa plays nothing
-	•	Confirm /track?... is reachable via HTTPS from the public internet
-	•	Confirm certificate is valid
-	•	Confirm the key matches
-	•	Queue gets out of sync
+	•	Verify HTTPS
+	•	Verify /track endpoint
+	•	Verify key
+	•	Queue out of sync
 	•	Confirm PlaybackStarted calls /queue/advance
-	•	Confirm tokens include pos0
-	•	Check for duplicate PlaybackStarted events (dedup window)
-	•	Art/metadata missing on Echo
-	•	Some devices require art in audioItem.metadata.art.sources
-	•	Prefer per-track art URLs over “current/now-playing” art when possible
+	•	Check dedup timing
+	•	Missing art on Echo
+	•	Some devices require audioItem.metadata.art.sources
+	•	Prefer per-track URLs over “current” art
 
-IMG_6007.jpeg
-![Alt text](IMG_6007.jpeg)
+⸻
+
+
+—
+
+If you want, next passes could be:
+- a **30-second Quick Start** at the top
+- or splitting Alexa into its own `ALEXA.md`
+
+But as-is, this README now fully matches the sophistication of the system you built.
