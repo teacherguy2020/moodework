@@ -175,6 +175,132 @@ In all modes, the UI strives for consistent metadata presentation.
 
 ---
 
+## Enhanced Radio Metadata via iTunes Lookup
+
+By default, most internet radio streams provide **very limited metadata**:
+- A single scrolling title string
+- No reliable album information
+- Station logos instead of album art
+- No release year
+
+moOde itself reflects these limitations.
+
+This project deliberately enhances radio playback by performing a **real-time iTunes lookup** to reconstruct *album-quality metadata* whenever possible.
+
+---
+
+### What This Enhancement Does
+
+When a radio stream is playing, the API:
+
+1. Examines the incoming radio title line  
+   (e.g. `"BILL EVANS - Autumn Leaves"`)
+
+2. Parses and normalizes artist/title candidates
+
+3. Queries the iTunes Search API using those values
+
+4. If a confident match is found:
+   - Replaces station logo art with **album artwork**
+   - Populates:
+     - **Album name**
+     - **Release year**
+   - Stabilizes metadata so it doesn’t flicker between updates
+
+If no suitable match is found, the system **gracefully falls back** to the station’s own artwork and text.
+
+No user configuration is required.
+
+---
+
+### Why iTunes?
+
+iTunes provides:
+- A massive, well-curated jazz / classical / catalog archive
+- Reliable album-level artwork
+- Consistent release-year metadata
+- Public, unauthenticated search access
+
+This makes it ideal for *radio enrichment* without introducing:
+- Account requirements
+- API keys
+- Rate-limit fragility for normal usage
+
+---
+
+### What the UI Shows (Radio Mode)
+
+When iTunes enrichment succeeds, the display shows:
+
+- Track title (parsed and stabilized)
+- Artist name
+- **Album name (from iTunes)**
+- **Release year (from iTunes)**
+- High-quality album artwork
+- Optional blurred background derived from the same art
+
+Ratings and progress are intentionally hidden for radio playback, since there is no stable file or duration.
+
+---
+
+### Intentional Design Choices
+
+- iTunes metadata is **only used for radio streams**
+- Local files always use embedded / folder / MPD-based metadata
+- UPnP streams attempt local file resolution first
+- AirPlay uses its own artwork pipeline (via `aplmeta.txt`)
+
+This ensures:
+- No incorrect overwrites of local library metadata
+- Predictable behavior per playback mode
+- Clear separation of responsibilities between sources
+
+---
+![Display](./radio.jpeg)
+
+### Failure Is Safe
+
+If any step fails:
+- iTunes lookup
+- Title parsing
+- Network fetch
+- Art download
+
+…the system automatically falls back to moOde’s native behavior:
+- Station logo
+- Original stream text
+
+There are **no hard dependencies** and no negative impact on playback.
+
+---
+
+### Why This Matters
+
+For many users, radio listening is exploratory and album-oriented.
+
+This enhancement turns radio playback from:
+
+> “A station logo with a scrolling string”
+
+into:
+
+> “An album-aware listening experience that feels like local playback”
+
+without modifying moOde itself and without compromising stability.
+
+---
+
+### Summary
+
+- ✔ Automatic
+- ✔ Read-only
+- ✔ Radio-only
+- ✔ No API keys
+- ✔ Safe fallback
+- ✔ Major visual + informational upgrade
+
+This is one of the most distinctive features of the **moOde “Now Playing”** system.
+
 ## Primary Project Files
 
 | File | Runs On | Purpose |
