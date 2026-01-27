@@ -41,14 +41,14 @@ const execFileP = promisify(execFile);
 const PORT = Number(process.env.PORT || '3000');
 
 const MOODE_BASE_URL = process.env.MOODE_BASE_URL || 'http://YOUR MOODE IP';
-const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'https://moode.YOUR PUBLIC DOMAIN.com';
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'https://moode.YOUR DOMAIN NAME.com';
 
-const LOCAL_ADDRESS = process.env.LOCAL_ADDRESS || 'YOUR WEBSERVER IP NO HTTP';
+const LOCAL_ADDRESS = process.env.LOCAL_ADDRESS || 'WEB SERVER IP NO HTTP';
 
-const MPD_HOST = process.env.MPD_HOST || 'YOUR MOODE IP NO HTTP';
+const MPD_HOST = process.env.MPD_HOST || 'MOODE IP NO HTTP';
 const MPD_PORT = Number(process.env.MPD_PORT || '6600');
 
-const MOODE_USB_PREFIX = process.env.MOODE_USB_PREFIX || 'PATH/TO MUSIC/';
+const MOODE_USB_PREFIX = process.env.MOODE_USB_PREFIX || 'PATH LIKE 'USB'/YOUR DRIVE/';
 const PI4_MOUNT_BASE = process.env.PI4_MOUNT_BASE || '/mnt/YOUR DRIVE';
 
 const METAFLAC = process.env.METAFLAC || '/usr/bin/metaflac';
@@ -481,6 +481,19 @@ async function getDeepMetadataCached(mpdFile) {
 /* =========================
  * Art
  * ========================= */
+ 
+function pickItunesLinkFromItem(item) {
+  return item?.collectionViewUrl || item?.trackViewUrl || '';
+}
+ 
+function isHttpUrl(s) {
+  return /^https?:\/\//i.test(String(s || '').trim());
+}
+
+function isRelativeMoodeCover(s) {
+  const t = String(s || '').trim();
+  return t.startsWith('/coverart.php/');
+}
 async function buildArtDerivatives(rawUrl) {
   const r = await fetch(rawUrl, { agent: agentForUrl(rawUrl), cache: 'no-store' });
   if (!r.ok) throw new Error(`art fetch failed: ${r.status}`);
@@ -778,32 +791,47 @@ function pickAlbumAndYearFromItunesItem(item) {
 }
 
 async function lookupItunesFirst(artist, title, debug = false) {
-  if (!artist || !title) return { url: '', album: '', year: '', reason: 'missing-artist-or-title' };
+  const a = String(artist || '').trim();
+  const t = String(title || '').trim();
+  if (!a || !t) return { url: '', album: '', year: '', reason: 'missing-artist-or-title' };
 
-  const key = `song|${artist.toLowerCase()}|${title.toLowerCase()}`;
+  const key = `song|${a.toLowerCase()}|${t.toLowerCase()}`;
   const now = Date.now();
 
   const cached = itunesArtCache.get(key);
   if (cached && !debug) {
     const ttl = cached.url ? ITUNES_TTL_HIT_MS : ITUNES_TTL_MISS_MS;
-    if (now - cached.ts < ttl) return { ...cached, reason: cached.url ? 'cache-hit' : 'cache-hit-empty' };
+    if (now - cached.ts < ttl) {
+      return { url: cached.url || '', album: cached.album || '', year: cached.year || '', reason: cached.url ? 'cache-hit' : 'cache-hit-empty' };
+    }
     itunesArtCache.delete(key);
   }
 
-  const term = encodeURIComponent(`${artist} ${title}`);
+  const term = encodeURIComponent(`${a} ${t}`);
   const queryUrl = `${ITUNES_SEARCH_URL}?term=${term}&media=music&entity=song&limit=5&country=${ITUNES_COUNTRY}`;
 
   try {
     const data = await fetchJsonWithTimeout(queryUrl, ITUNES_TIMEOUT_MS);
-    const first = Array.isArray(data?.results) ? data.results[0] : null;
+    const results = Array.isArray(data?.results) ? data.results : [];
 
-    const url = pickArtFromItunesItem(first);
-    const { album, year } = pickAlbumAndYearFromItunesItem(first);
+    let url = '';
+    let album = '';
+    let year = '';
+
+    for (const item of results) {
+      url = pickArtFromItunesItem(item);
+      if (url) {
+        const picked = pickAlbumAndYearFromItunesItem(item);
+        album = picked.album || '';
+        year = picked.year || '';
+        break;
+      }
+    }
 
     const packed = { url, album, year, ts: now };
     itunesArtCache.set(key, packed);
 
-    return { url, album, year, reason: url ? 'ok:songFirst' : 'no-art:songFirst' };
+    return { url, album, year, reason: url ? 'ok:bestMatch' : 'no-art' };
   } catch (e) {
     itunesArtCache.set(key, { url: '', album: '', year: '', ts: now });
     return { url: '', album: '', year: '', reason: `error:${e?.name || 'Error'}` };
@@ -1345,40 +1373,65 @@ app.get('/next-up', async (req, res) => {
   }
 });
 
+
 app.get('/art/current_320.jpg', async (req, res) => {
   try {
+    // 1) If client provides an art key, serve that exact key (deterministic)
+    const v = String(req.query.v || '').trim();
+    if (v) {
+      const key = normalizeArtKey(v);
+      if (!key) return res.status(404).end();
+
+      await updateArtCacheIfNeeded(key);
+
+      if (safeIsFile(ART_640_PATH)) {
+        res.set('Content-Type', 'image/jpeg');
+        res.set('Cache-Control', 'no-store');
+        return res.status(200).send(await fs.promises.readFile(ART_640_PATH));
+      }
+
+      // Fallback: fetch + resize directly from the key URL
+      const buf = await fetchMoodeCoverBytes(key);
+      return await sendJpeg(res, buf, 640);
+    }
+
+    // 2) No ?v= → compute best art for *current* song
     const song = await fetchJson(`${MOODE_BASE_URL}/command/?cmd=get_currentsong`);
     const statusRaw = await fetchJson(`${MOODE_BASE_URL}/command/?cmd=status`);
 
     const file = String(song.file || '').trim();
     const stream = isStreamPath(file);
-    const airplay = isAirplayFile(file) || String(song.encoded || '').toLowerCase() === 'airplay';
+    const airplay =
+      isAirplayFile(file) || String(song.encoded || '').toLowerCase() === 'airplay';
 
     let best = '';
 
-    // 0) AirPlay => aplmeta cover (moOde writes local file path/url)
+    // 0) AirPlay => aplmeta cover
     if (airplay) {
-      best = await getAirplayCoverUrlFromAplmeta(MOODE_BASE_URL);
+      best = await getAirplayCoverUrlFromAplmeta(MOODE_BASE_URL); // absolute http://10.x/...
     }
 
-    // 1) Local file => direct coverart
+    // 1) Local library file => coverart.php
     if (!best && !stream && file) {
-      best = `/coverart.php/${encodeURIComponent(file)}`;
+      best = `/coverart.php/${encodeURIComponent(file)}`; // relative -> fetchMoodeCoverBytes resolves it
     }
 
-    // 2) Stream
+    // 2) Streams
     if (!best && stream) {
-      // Prefer iTunes alt art for RADIO streams (via your own now-playing payload)
-      try {
-        const np = await fetchJson(`${PUBLIC_BASE_URL}/now-playing`);
-        if (np && np.isStream && String(np.streamKind || '').toLowerCase() === 'radio') {
-          const alt = String(np.altArtUrl || '').trim();
-          if (alt) best = alt; // absolute URL (iTunes)
-        }
-      } catch {}
+      const streamKind = String(getStreamKind(file) || '').trim().toLowerCase(); // 'radio' | 'upnp' | ''
 
-      // UPnP: try resolve to local file art
-      if (!best) {
+      // 2a) RADIO => iTunes art first
+      if (streamKind === 'radio') {
+        const decodedTitle = decodeHtmlEntities(song.title || '');
+        const parts = decodedTitle.split(' - ').map(s => s.trim()).filter(Boolean);
+        if (parts.length >= 2) {
+          const it = await lookupItunesFirst(parts[0], parts.slice(1).join(' - '), false);
+          if (it?.url) best = it.url; // absolute https://...mzstatic...
+        }
+      }
+
+      // 2b) UPnP => try resolve to local file coverart
+      if (!best && streamKind === 'upnp') {
         const songpos = String(moodeValByKey(statusRaw, 'song') || '').trim();
         const songid  = String(moodeValByKey(statusRaw, 'songid') || '').trim();
 
@@ -1399,29 +1452,65 @@ app.get('/art/current_320.jpg', async (req, res) => {
     if (!best && song.coverurl) best = normalizeCoverUrl(song.coverurl, MOODE_BASE_URL);
     if (!best) return res.status(404).end();
 
+    // 3b) Build cache *for this best key*, then serve cache (or fallback)
+    const key = normalizeArtKey(best);
+    if (key) {
+      await updateArtCacheIfNeeded(key);
+
+      if (safeIsFile(ART_640_PATH)) {
+        res.set('Content-Type', 'image/jpeg');
+        res.set('Cache-Control', 'no-store');
+        return res.status(200).send(await fs.promises.readFile(ART_640_PATH));
+      }
+    }
+
+    // 4) Fallback: fetch + resize directly
     const buf = await fetchMoodeCoverBytes(best);
-    await sendJpeg(res, buf, 640);
+    return await sendJpeg(res, buf, 640);
+
   } catch {
-    res.status(404).end();
+    return res.status(404).end();
   }
 });
 
-
 app.get('/art/current_bg_640_blur.jpg', async (req, res) => {
   try {
-    // Fast path: serve cached file if present
-    if (safeIsFile(ART_BG_PATH)) {
+    // 1) Deterministic: client-provided key wins
+    const v = String(req.query.v || '').trim();
+    if (v) {
+      const key = normalizeArtKey(v);
+      if (!key) return res.status(404).end();
+
+      await updateArtCacheIfNeeded(key);
+
+      if (safeIsFile(ART_BG_PATH)) {
+        res.set('Content-Type', 'image/jpeg');
+        res.set('Cache-Control', 'no-store');
+        return res.status(200).send(await fs.promises.readFile(ART_BG_PATH));
+      }
+
+      // Fallback: blur on the fly from the key URL
+      const buf = await fetchMoodeCoverBytes(key);
+      const outBG = await sharp(buf)
+        .rotate()
+        .resize(640, 640, { fit: 'cover' })
+        .blur(18)
+        .jpeg({ quality: 70, mozjpeg: true })
+        .toBuffer();
+
       res.set('Content-Type', 'image/jpeg');
       res.set('Cache-Control', 'no-store');
-      return res.status(200).send(await fs.promises.readFile(ART_BG_PATH));
+      return res.status(200).send(outBG);
     }
 
+    // 2) No ?v= → compute best art for *current* song
     const song = await fetchJson(`${MOODE_BASE_URL}/command/?cmd=get_currentsong`);
     const statusRaw = await fetchJson(`${MOODE_BASE_URL}/command/?cmd=status`);
 
     const file = String(song.file || '').trim();
     const stream = isStreamPath(file);
-    const airplay = isAirplayFile(file) || String(song.encoded || '').toLowerCase() === 'airplay';
+    const airplay =
+      isAirplayFile(file) || String(song.encoded || '').toLowerCase() === 'airplay';
 
     let best = '';
 
@@ -1430,17 +1519,28 @@ app.get('/art/current_bg_640_blur.jpg', async (req, res) => {
       best = await getAirplayCoverUrlFromAplmeta(MOODE_BASE_URL);
     }
 
-    // 1) Local library file
+    // 1) Local library file => coverart.php
     if (!best && !stream && file) {
       best = `/coverart.php/${encodeURIComponent(file)}`;
     }
 
     // 2) Streams
     if (!best && stream) {
-      const streamKind = String(getStreamKind(file) || '').trim(); // 'radio' | 'upnp' | ''
+      const streamKind = String(getStreamKind(file) || '').trim().toLowerCase(); // 'radio' | 'upnp' | ''
 
-      // 2a) UPnP => resolve to local file if possible
-      if (streamKind === 'upnp') {
+      // 2a) RADIO => iTunes first
+      if (streamKind === 'radio') {
+        const decodedTitle = decodeHtmlEntities(song.title || '');
+        const parts = decodedTitle.split(' - ').map(s => s.trim()).filter(Boolean);
+
+        if (parts.length >= 2) {
+          const it = await lookupItunesFirst(parts[0], parts.slice(1).join(' - '), false);
+          if (it?.url) best = it.url; // absolute https URL
+        }
+      }
+
+      // 2b) UPnP => resolve to local file if possible
+      if (!best && streamKind === 'upnp') {
         const songpos = String(moodeValByKey(statusRaw, 'song') || '').trim();
         const songid  = String(moodeValByKey(statusRaw, 'songid') || '').trim();
 
@@ -1455,25 +1555,26 @@ app.get('/art/current_bg_640_blur.jpg', async (req, res) => {
 
         if (realFile) best = `/coverart.php/${encodeURIComponent(realFile)}`;
       }
-
-      // 2b) RADIO => iTunes replacement first
-      if (!best && streamKind === 'radio') {
-        const decodedTitle = decodeHtmlEntities(song.title || '');
-        const parts = decodedTitle.split(' - ').map(s => s.trim()).filter(Boolean);
-
-        if (parts.length >= 2) {
-          const it = await lookupItunesFirst(parts[0], parts.slice(1).join(' - '), false);
-          if (it && it.url) best = it.url; // absolute https URL
-        }
-      }
     }
 
-    // 3) Last resort: moOde-provided coverurl (station logo, etc.)
+    // 3) Final fallback: moOde coverurl (station logo, etc.)
     if (!best && song.coverurl) best = normalizeCoverUrl(song.coverurl, MOODE_BASE_URL);
     if (!best) return res.status(404).end();
 
-    const buf = await fetchMoodeCoverBytes(best);
+    // 3b) Build cache for THIS key, then serve cached blur
+    const key = normalizeArtKey(best);
+    if (key) {
+      await updateArtCacheIfNeeded(key);
 
+      if (safeIsFile(ART_BG_PATH)) {
+        res.set('Content-Type', 'image/jpeg');
+        res.set('Cache-Control', 'no-store');
+        return res.status(200).send(await fs.promises.readFile(ART_BG_PATH));
+      }
+    }
+
+    // 4) Fallback: blur on the fly
+    const buf = await fetchMoodeCoverBytes(best);
     const outBG = await sharp(buf)
       .rotate()
       .resize(640, 640, { fit: 'cover' })
@@ -1484,8 +1585,9 @@ app.get('/art/current_bg_640_blur.jpg', async (req, res) => {
     res.set('Content-Type', 'image/jpeg');
     res.set('Cache-Control', 'no-store');
     return res.status(200).send(outBG);
+
   } catch {
-    res.status(404).end();
+    return res.status(404).end();
   }
 });
 
