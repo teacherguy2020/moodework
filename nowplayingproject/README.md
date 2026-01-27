@@ -55,13 +55,14 @@ It only talks to Pi #2.
 
 ⸻
 ```
-Playback Modes & Behavior
+## Playback Modes & Behavior
 
-Mode	Source	Album Art (Primary → Fallback)	Ratings	Progress	Notes
-Local	MPD file	Embedded → folder → coverart.php	✅ Yes	✅ Yes	Full metadata + stickers
-Radio	Stream URL	iTunes lookup → station logo	❌ No	❌ No	Album/year from iTunes
-UPnP	MPD stream	Resolved local file → coverart.php	❌ No	❌ No	Treated as stream
-AirPlay	Shairplay	aplmeta cover → API proxy / fallback	❌ No	❌ No	LAN-only raw art
+| Mode   | Source     | Album Art (Primary → Fallback)               | Ratings | Progress | Notes                    |
+|--------|------------|----------------------------------------------|---------|----------|--------------------------|
+| Local  | MPD file   | Embedded → folder → coverart.php             | ✅ Yes  | ✅ Yes   | Full metadata + stickers |
+| Radio  | Stream URL | iTunes album art → station logo              | ❌ No   | ❌ No    | Album/year from iTunes   |
+| UPnP   | MPD stream | Resolved local file → coverart.php           | ❌ No   | ❌ No    | Treated as stream        |
+| AirPlay| Shairplay  | aplmeta cover → API proxy / fallback         | ❌ No   | ❌ No    | LAN-only raw art         |
 
 This behavior is intentional and enforced consistently by both the API and UI.
 ```
