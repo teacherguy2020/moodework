@@ -59,7 +59,7 @@ across multiple Raspberry Pi nodes for **stability, performance, and flexibility
 ```
 ⸻
 
-Roles of Each Raspberry Pi
+# Roles of Each Raspberry Pi
 
 Pi #1 — moOde Player (Audio Only)
 	•	Runs moOde Audio Player
@@ -178,7 +178,7 @@ artwork |
 ---
 ⸻
 
-Networking Requirements
+# Networking Requirements
 
 All Pis must be on the same LAN.
 
@@ -278,7 +278,7 @@ unclutter -idle 0 &
 
 ⸻
 
-Optional: Alexa Skill Integration
+# Optional: Alexa Skill Integration
 
 This project includes a fully supported Alexa Skill integration that allows Echo devices to:
 	•	Play the current moOde track
@@ -366,7 +366,7 @@ Optional:
 
 ⸻
 
-MPD Stickers (Required for Ratings)
+# MPD Stickers (Required for Ratings)
 
 Ratings use MPD stickers, not file tags.
 
@@ -381,7 +381,7 @@ Ratings:
 
 ⸻
 
-Dependencies
+# Other Dependencies
 
 This project intentionally keeps dependencies minimal, but several external tools are required depending on which features you enable.
 
