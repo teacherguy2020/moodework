@@ -227,8 +227,14 @@ async function bootThenStart() {
       ? String(data.altArtUrl).trim()
       : (data.albumArtUrl || '');
 
+  const firstKey = normalizeArtKey(firstArtUrl);
+  const firstBgUrl =
+    (ENABLE_BACKGROUND_ART && firstKey)
+      ? `${API_BASE}/art/current_bg_640_blur.jpg?v=${encodeURIComponent(firstKey)}`
+      : '';
+
   // If bg disabled or no art, don't wait
-  if (!ENABLE_BACKGROUND_ART || !firstArtUrl) {
+  if (!ENABLE_BACKGROUND_ART || !firstKey) {
     updateUI(data);
     if (!data.isStream && !data.isAirplay) loadCurrentRating();
     else clearStars();
@@ -237,8 +243,8 @@ async function bootThenStart() {
     return;
   }
 
-  // Preload first background image
-  await preloadImage(firstArtUrl);
+  // Preload first blurred background image (keyed)
+  await preloadImage(firstBgUrl);
 
   // Snap first bg in place WITHOUT fading (prevents black flash)
   const a = document.getElementById('background-a');
@@ -250,15 +256,17 @@ async function bootThenStart() {
     a.style.transition = 'none';
     b.style.transition = 'none';
 
-    a.style.backgroundImage = `url("${firstArtUrl}")`;
+    a.style.backgroundImage = `url("${firstBgUrl}")`;
     b.style.backgroundImage = 'none';
 
     a.style.opacity = '1';
     b.style.opacity = '0';
 
     bgFront = 'a';
-    bgUrlFront = firstArtUrl;
+    bgUrlFront = firstBgUrl;
+    bgKeyFront = firstKey;
     bgLoadingUrl = '';
+    bgLoadingKey = '';
 
     requestAnimationFrame(() => {
       a.style.transition = aPrevTrans || '';
@@ -266,10 +274,11 @@ async function bootThenStart() {
     });
   }
 
-  // Album-art glow background (cheap)
+  // Album-art glow background (cheap) should stay *unblurred*
   const artBgEl = document.getElementById('album-art-bg');
   if (artBgEl) {
-    artBgEl.style.backgroundImage = `url("${firstArtUrl}")`;
+    const firstFgUrl = `${API_BASE}/art/current_320.jpg?v=${encodeURIComponent(firstKey)}`;
+    artBgEl.style.backgroundImage = `url("${firstFgUrl}")`;
     artBgEl.style.backgroundSize = 'cover';
     artBgEl.style.backgroundPosition = 'center';
   }
@@ -1328,6 +1337,7 @@ function updateUI(data) {
   // --- Elements ---
   const artistEl    = document.getElementById('artist-name');
   const titleEl     = document.getElementById('track-title');
+  const albumLinkEl = document.getElementById('album-link');
   const albumTextEl = document.getElementById('album-text');
   const fileInfoEl  = document.getElementById('file-info-text');
   const hiresBadge  = document.getElementById('hires-badge');
@@ -1346,42 +1356,36 @@ function updateUI(data) {
   if (isAirplay && !String(displayTitle || '').trim()) displayTitle = 'AirPlay';
 
   if (isRadio) {
-    // Prefer stabilized result if caller provided it
     const stabArtist = String(data?._radioDisplay?.artist || '').trim();
     const stabTitle  = String(data?._radioDisplay?.title  || '').trim();
 
-    // If API ever adds explicit radioArtist/radioTitle, they should win.
     const radioArtist = String(data.radioArtist || '').trim();
     const radioTitle  = String(data.radioTitle  || '').trim();
 
-    // Always try to tease artist/title out of the incoming title line (hyphen split),
-    // because moOde often leaves artist as "Radio station".
     const incomingTitleLine = decodeHtmlEntities(String(data.title || '').trim());
 
     let teasedArtist = '';
     let teasedTitle  = '';
 
-    // Normalize dash spacing first, then split
     const dashSplit = splitArtistDashTitle(normalizeDashSpacing(incomingTitleLine));
     if (dashSplit) {
       teasedArtist = String(dashSplit.artist || '').trim();
       teasedTitle  = String(dashSplit.title  || '').trim();
     }
 
-    // Choose best display values (most -> least specific)
     displayArtist =
       radioArtist ||
       stabArtist ||
       teasedArtist ||
-      String(displayArtist || '').trim() ||          // last resort from payload
-      String(data.album || '').trim() ||             // station name fallback
+      String(displayArtist || '').trim() ||
+      String(data.album || '').trim() ||
       'Radio';
 
     displayTitle =
       radioTitle ||
       stabTitle ||
       teasedTitle ||
-      String(displayTitle || '').trim() ||           // last resort from payload
+      String(displayTitle || '').trim() ||
       incomingTitleLine;
   }
 
@@ -1392,7 +1396,7 @@ function updateUI(data) {
   if (titleEl)  titleEl.textContent  = decodeHtmlEntities(displayTitle);
 
   // =========================
-  // Album line (prefer iTunes for radio)
+  // Album line (prefer iTunes for radio) + link to Apple Music
   // =========================
 
   if (albumTextEl) {
@@ -1407,14 +1411,43 @@ function updateUI(data) {
     albumTextEl.textContent = album ? `${album}${year ? ` (${year})` : ''}` : '';
   }
 
+  if (albumLinkEl) {
+    if (isRadio) {
+      const url = String(data.radioItunesUrl || '').trim();
+      if (url) {
+        albumLinkEl.href = url;
+        albumLinkEl.target = '_blank';
+        albumLinkEl.rel = 'noopener';
+        albumLinkEl.style.pointerEvents = 'auto';
+        albumLinkEl.style.cursor = 'pointer';
+        albumLinkEl.title = 'Open in Apple Music';
+      } else {
+        albumLinkEl.removeAttribute('href');
+        albumLinkEl.removeAttribute('target');
+        albumLinkEl.removeAttribute('rel');
+        albumLinkEl.style.pointerEvents = 'none';
+        albumLinkEl.style.cursor = '';
+        albumLinkEl.removeAttribute('title');
+      }
+    } else {
+      albumLinkEl.removeAttribute('href');
+      albumLinkEl.removeAttribute('target');
+      albumLinkEl.removeAttribute('rel');
+      albumLinkEl.style.pointerEvents = 'none';
+      albumLinkEl.style.cursor = '';
+      albumLinkEl.removeAttribute('title');
+    }
+  }
+
   // =========================
-  // File info + badge
+  // File info + badge (hide outrate in display, still used in calc)
   // =========================
 
   if (fileInfoEl && hiresBadge) {
     const parts = [];
-    if (data.encoded) parts.push(data.encoded);
-    //if (data.outrate) parts.push(data.outrate);
+    if (data.encoded) parts.push(String(data.encoded).trim());
+    // Intentionally do NOT display outrate:
+    // if (data.outrate) parts.push(String(data.outrate).trim());
 
     fileInfoEl.textContent = parts.join(' • ');
 
@@ -1443,31 +1476,31 @@ function updateUI(data) {
   }
 
   // =========================
-  // Album Art (THE ONLY PLACE) -- FIXED
+  // Album Art (foreground + blurred background)
   // =========================
 
-  // Raw candidate (may be http://10.0.0.254/... for AirPlay covers)
   const alt = String(data.altArtUrl || '').trim();
   const primary = String(data.albumArtUrl || '').trim();
 
-  // Radio: altArtUrl is only "trusted" if it looks like iTunes art.
-  // Otherwise we prefer station logo until iTunes art arrives.
   let rawArtUrl = '';
 
   if (isRadio) {
-  if (alt && isItunesArtUrl(alt) && !looksLikeAirplayCover(alt)) {
-      rawArtUrl = alt;           // iTunes art
+    // Prefer iTunes art when it appears (avoid stale AirPlay cover)
+    if (alt && typeof isItunesArtUrl === 'function' && isItunesArtUrl(alt) &&
+        !(typeof looksLikeAirplayCover === 'function' && looksLikeAirplayCover(alt))) {
+      rawArtUrl = alt;       // iTunes art
     } else {
-      rawArtUrl = primary;       // station logo (or blank)
+      rawArtUrl = primary;   // station logo
     }
   } else {
-    // Non-radio: keep your original precedence
+    // Non-radio: your original precedence
     rawArtUrl = alt || primary;
   }
-  console.log('[ART]', {
+
+  dlog('[ART]', {
     isRadio,
-    alt: String(data.altArtUrl || '').slice(0, 80),
-    albumArtUrl: String(data.albumArtUrl || '').slice(0, 80),
+    alt: alt.slice(0, 80),
+    albumArtUrl: primary.slice(0, 80),
     chosen: String(rawArtUrl || '').slice(0, 80)
   });
 
@@ -1480,22 +1513,15 @@ function updateUI(data) {
       String(artEl.getAttribute('src') || '').startsWith('data:image')
     );
 
-  const artChanged = artKey && (artKey !== lastAlbumArtKey || needsInitialPaint);
+  const artChanged = !!artKey && (artKey !== lastAlbumArtKey || needsInitialPaint);
 
-  // Background should always come from the API endpoint (same origin rules handled)
+  // Use the *blurred bg* endpoint for the crossfade background
   const bgArtUrl =
     (ENABLE_BACKGROUND_ART && artKey)
-      ? `${API_BASE}/art/current_320.jpg?v=${encodeURIComponent(artKey)}`
+      ? `${API_BASE}/art/current_bg_640_blur.jpg?v=${encodeURIComponent(artKey)}`
       : '';
 
-  // Foreground:
-  // - If we're on PUBLIC (https://moode.brianwis.com), do NOT use altArtUrl if it’s http://10.x (mixed content blocked).
-  // - If we're on LAN, AirPlay should use altArtUrl directly so we get the *real* cover (not a fallback).
-  const isAltHttpLan =
-    /^http:\/\/10\./i.test(rawArtUrl) ||
-    /^http:\/\/192\.168\./i.test(rawArtUrl) ||
-    /^http:\/\/172\.16\./i.test(rawArtUrl);
-
+  // Foreground art: for LAN AirPlay, allow direct http://10.x art (only if not public)
   const fgUrl = (isAirplay && !IS_PUBLIC && rawArtUrl)
     ? rawArtUrl
     : (artKey ? `${API_BASE}/art/current_320.jpg?v=${encodeURIComponent(artKey)}` : '');
@@ -1512,17 +1538,16 @@ function updateUI(data) {
 
     // Background
     if (ENABLE_BACKGROUND_ART) {
-      setBackgroundCrossfade(bgArtUrl, artKey);
+      setBackgroundCrossfade(bgArtUrl);
 
       if (artBgEl) {
-        // Use the same foreground image as the glow layer when possible
         const glowUrl = fgUrl || '';
         artBgEl.style.backgroundImage = glowUrl ? `url("${glowUrl}")` : 'none';
         artBgEl.style.backgroundSize = 'cover';
         artBgEl.style.backgroundPosition = 'center';
       }
     } else {
-      setBackgroundCrossfade('', '');
+      setBackgroundCrossfade('');
       if (artBgEl) artBgEl.style.backgroundImage = 'none';
     }
   }
