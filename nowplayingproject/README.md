@@ -117,7 +117,7 @@ No local files.
 You can skip Pi #3 entirely and view the display from any browser.
 
 ⸻
-
+```
 Playback Modes & Behavior
 
 Mode	Source	Album Art (Primary → Fallback)	Ratings	Progress	Notes
@@ -127,7 +127,7 @@ UPnP	MPD stream	Resolved local file → coverart.php	❌ No	❌ No	Treated as st
 AirPlay	Shairplay	aplmeta cover → API proxy / fallback	❌ No	❌ No	LAN-only raw art
 
 This behavior is intentional and enforced consistently by both the API and the UI.
-
+```
 ⸻
 
 Project Files
