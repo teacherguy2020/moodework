@@ -25,7 +25,6 @@ across multiple Raspberry Pi nodes for **stability, performance, and flexibility
 ```
 ## System Architecture (Three Pis)
 
-```text
 ┌────────────────────────┐
 │ Pi #1 — moOde Player   │
 │ (Audio playback)       │
