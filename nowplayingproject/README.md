@@ -1,14 +1,14 @@
 ⸻
 # moOde “Now Playing”
 
-A distributed, high-performance **Now Playing** display and control system for **moOde Audio Player**, designed for a dedicated full-screen 1080p display — but viewable from **any device on your network**. (Could use some help creating various `@media` views.)
+A distributed, high-performance **Now Playing** display system for **moOde Audio Player**, designed for a dedicated full-screen 1080p display — but viewable from **any device on your network**. (Could use some help creating various `@media` views). Display will show track personnel and 5-star ratings (if you have in your metadata/moOde sql).
 
 This project intentionally separates:
 
 - **Audio playback**
 - **Metadata processing**
 - **UI rendering**
-- **(Optionally) Alexa voice control**
+- **(Optionally) Alexa skill so you can create a queue in moOde and hear on Echo devices**
 
 across multiple Raspberry Pi nodes for **stability, performance, and flexibility**.
 
